@@ -21,7 +21,10 @@ jobs:
           cache: "poetry"
 
       - name: Install Poetry
-        run: pipx install poetry==2.2.1
+        run: |
+          python -m pip install --upgrade pip
+          pip install --user poetry==2.2.1
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Install dependencies
         run: poetry install
