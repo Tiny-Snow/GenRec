@@ -1,0 +1,11 @@
+[run]
+branch = True
+omit =
+    src/genrec/mian_genrec.py
+    src/genrec/main_quantizer.py
+    src/genrec/main_seqrec.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == "__main__":

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.env/
+.venv/
+
+# Data & artifacts
+data
+data/
+outputs/
+logs/
+
+# Testing
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# VSCode / IDE
+.vscode/
+.idea/
