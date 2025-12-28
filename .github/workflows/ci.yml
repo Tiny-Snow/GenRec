@@ -21,9 +21,7 @@ jobs:
           cache: "poetry"
 
       - name: Install Poetry
-        uses: abatilo/actions-poetry@v2
-        with:
-          poetry-version: "2.2.1"
+        run: pipx install poetry==2.2.1
 
       - name: Install dependencies
         run: poetry install
