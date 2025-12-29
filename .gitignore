@@ -7,11 +7,12 @@ __pycache__/
 .env/
 .venv/
 
-# Data & artifacts
+# Data, scripts & artifacts
 data
 data/
 outputs/
 logs/
+scripts_running/
 
 # Testing
 .pytest_cache/

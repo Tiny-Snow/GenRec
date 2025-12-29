@@ -50,8 +50,8 @@ trainer:
 
         # training arguments - Optimization & schedule
         num_train_epochs: 200
-        per_device_train_batch_size: 128
-        per_device_eval_batch_size: 256
+        per_device_train_batch_size: 512
+        per_device_eval_batch_size: 1024
         gradient_accumulation_steps: 1  # batch_size = per_device_train_batch_size * num_devices * gradient_accumulation_steps
         learning_rate: 1.0e-3
         weight_decay: 1.0e-5

@@ -1,6 +1,7 @@
 import torch
 
 from genrec.models.model_seqrec.sasrec_spring import SASRecSpringModel, SASRecSpringModelConfig
+from genrec.models.modules.utils import create_attention_mask
 
 
 def test_sasrec_spring_returns_weighted_model_loss(monkeypatch):
@@ -46,14 +47,16 @@ def test_sasrec_spring_returns_weighted_model_loss(monkeypatch):
 
     device = output.model_loss.device
     dtype = output.model_loss.dtype
-    log2 = torch.log(torch.tensor(2.0, device=device, dtype=dtype))
-    log24 = torch.log(torch.tensor(24.0, device=device, dtype=dtype))
-    per_layer_attention = 0.5 * log24 + log2
-    ffn_component = 2 * log2
+    attn_component = torch.sqrt(torch.tensor(24.0, device=device, dtype=dtype)) * torch.tensor(
+        2.0, device=device, dtype=dtype
+    )
+    per_layer_attention = torch.log1p(attn_component)
+    ffn_component = torch.log1p(torch.tensor(4.0, device=device, dtype=dtype))
+    emb_component = torch.log1p(torch.tensor(2.0, device=device, dtype=dtype))
     expected_model_loss = (
         config.spring_attention_weight * per_layer_attention
         + config.spring_ffn_weight * ffn_component
-        + config.spring_emb_weight * log2
+        + config.spring_emb_weight * emb_component
     )
 
     torch.testing.assert_close(output.model_loss, expected_model_loss)
@@ -130,7 +133,9 @@ def test_sasrec_spring_attention_weight_spectral_norm_masks_padding():
     result = model._attention_weight_spectral_norm(attn_weight, attention_mask)
 
     tau = config.spring_attention_temperature
-    query_sums = attn_weight.sum(dim=-2).flatten()
+    mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool().squeeze(1)
+    masked_attn = attn_weight.masked_fill(mask, 0.0)
+    query_sums = masked_attn.sum(dim=-2).flatten()
     masked = query_sums[attention_mask.bool().flatten()]
     expected = torch.logsumexp(masked * tau, dim=0) / tau
 

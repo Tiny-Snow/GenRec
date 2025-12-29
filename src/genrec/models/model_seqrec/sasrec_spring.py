@@ -157,7 +157,7 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         # Spring regularization on item embeddings
         if output_model_loss:
             item_emb_sn = self._power_iteration(self.item_embed.weight, name="item_embed_weight")
-            spring_loss_emb = item_emb_sn.log()
+            spring_loss_emb = item_emb_sn.log1p()
 
         for layer_idx, layer in enumerate(self.layers):
             if output_hidden_states:
@@ -188,15 +188,14 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
                     attn_Av_sn = attn_Av_sn + attn_weight_h_sn * attn_Wv_h_sn.pow(2)
 
                 # Spring regularization on attention module
-                spring_loss_attn = spring_loss_attn + 0.5 * attn_Av_sn.log() + attn_Wo_sn.log()
+                spring_loss_attn = spring_loss_attn + (attn_Av_sn.sqrt() * attn_Wo_sn).log1p()
 
                 # Spring regularization on FFN modules
                 ffn_W1 = layer.mlp.up_proj.weight
                 ffn_W2 = layer.mlp.down_proj.weight
                 ffn_W1_sn = self._power_iteration(ffn_W1, name=f"ffn_{layer_idx}_w1")
                 ffn_W2_sn = self._power_iteration(ffn_W2, name=f"ffn_{layer_idx}_w2")
-                spring_loss_ffn = spring_loss_ffn + ffn_W1_sn.log()
-                spring_loss_ffn = spring_loss_ffn + ffn_W2_sn.log()
+                spring_loss_ffn = spring_loss_ffn + (ffn_W1_sn * ffn_W2_sn).log1p()
 
         # normalize by number of layers
         spring_loss_attn = spring_loss_attn / self.config.num_hidden_layers
@@ -301,6 +300,11 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         Returns:
             Float[torch.Tensor, ""]: Estimated spectral norm of the attention weight.
         """
+        # remask the attention weights to fix non-zero values at all-masked positions
+        causal_mask: Bool[torch.Tensor, "B 1 L L"]
+        causal_mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
+        attn_weight = attn_weight.masked_fill(causal_mask.squeeze(1), 0.0)
+
         query_sums: Float[torch.Tensor, "B*L"] = attn_weight.sum(dim=-2).flatten()
         attention_mask_flat: Bool[torch.Tensor, "B*L"] = attention_mask.bool().flatten()
         masked_query_sums: Float[torch.Tensor, "M"] = query_sums[attention_mask_flat]

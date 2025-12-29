@@ -1,4 +1,5 @@
-# SASRec + DROS on Amazon datasets
+# An example search config for SASRec-Spring + BCE loss on Amazon-Beauty dataset with grid search
+# Here `search__{hp}` indicates that `{hp}` is a list of hyperparameters to search over.
 
 # global settings
 pretrained_ckpt: null  # optional path to a pretrained checkpoint to load
@@ -9,12 +10,10 @@ save_predictions: false  # whether to save the predictions on the test set
 dataset:
     type: seqrec
 
+    # specific path to interaction data file for Amazon-Beauty dataset.
+    # You may add new datasets here to run experiments in parallel.
     search__interaction_data_path:
-    - /home/ywq/GenRec/data/amazon2014-beauty/proc/user2item.pkl  # Amazon-2014-Beauty
-    - /home/ywq/GenRec/data/amazon2014-book_1000000/proc/user2item.pkl  # Amazon-2014-Book-1M
-    # - /home/ywq/GenRec/data/amazon2014-cd/proc/user2item.pkl  # Amazon-2014-CD
-    # - /home/ywq/GenRec/data/amazon2014-clothing/proc/user2item.pkl  # Amazon-2014-Clothing
-    # - /home/ywq/GenRec/data/amazon2014-electronic_1000000/proc/user2item.pkl  # Amazon-2014-Electronic-1M
+    - /path/to/amazon2014-beauty/proc/user2item.pkl
     max_seq_length: 50
 
 # collator settings
@@ -26,20 +25,25 @@ collator:
 
 # model settings
 model:
-    type: sasrec
+    type: sasrec_spring
 
     config:
         # base model parameters
         hidden_size: 256
-        search__num_attention_heads: [1, 8]
+        search__num_attention_heads: [1, 2, 4, 8]
         search__num_hidden_layers: [2, 4, 6, 8]
 
         # subclass model parameters
-        search__attention_dropout: [0.2, 0.4]
+        search__attention_dropout: [0, 0.2, 0.4]
+        search__spring_attention_weight: [5.0, 2.5, 1.0, 1.0e-1]
+        search__spring_ffn_weight: [0, 1.0e-3, 1.0e-4]
+        search__spring_emb_weight: [0, 0.1, 0.01]
+        search__spring_attention_temperature: [1.0, 2.0, 4.0, 8.0]
+        spectral_norm_iters: 1
 
 # trainer settings
 trainer:
-    type: dros
+    type: bce
 
     config:
         # training arguments - Run control
@@ -53,7 +57,7 @@ trainer:
         per_device_eval_batch_size: 1024
         gradient_accumulation_steps: 1  # batch_size = per_device_train_batch_size * num_devices * gradient_accumulation_steps
         learning_rate: 1.0e-3
-        search__weight_decay: [0.1]
+        search__weight_decay: [0, 0.1]
         lr_scheduler_type: linear
         warmup_ratio: 0.05
 
@@ -70,11 +74,6 @@ trainer:
         - ["ndcg", {}]
         - ["popularity", {p: [0.1, 0.2]}]
         - ["unpopularity", {p: [0.2, 0.4]}]
-        model_loss_weight: 0.0
+        model_loss_weight: 1.0
         top_k: [1, 5, 10]
-
-        # subclass trainer parameters
-        search__dros_temperature: [0.5, 1.0, 1.5]
-        search__dros_weight: [0.1, 0.5]
-        popularity_temperature: 0.05
 
