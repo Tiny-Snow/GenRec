@@ -86,7 +86,7 @@ def test_sasrec_spring_power_iteration_registers_and_updates_buffers():
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
-        spectral_norm_iters=10,
+        spectral_norm_iters=50,
     )
     model = SASRecSpringModel(config)
 
