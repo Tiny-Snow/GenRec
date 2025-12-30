@@ -25,6 +25,13 @@ __all__ += [
     "DROSSeqRecTrainingArguments",
 ]
 
+from .logdet import LogDetSeqRecTrainer, LogDetSeqRecTrainingArguments
+
+__all__ += [
+    "LogDetSeqRecTrainer",
+    "LogDetSeqRecTrainingArguments",
+]
+
 from .sl import SLSeqRecTrainer, SLSeqRecTrainingArguments
 
 __all__ += [
