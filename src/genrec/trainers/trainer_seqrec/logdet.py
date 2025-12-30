@@ -38,13 +38,18 @@ class LogDetSeqRecTrainer(SeqRecTrainer[_SeqRecModel, LogDetSeqRecTrainingArgume
 
     This trainer extends the base `SeqRecTrainer` to implement the LogDet regularization
     loss function, a well-known redundancy reduction method in graph collaborative filtering.
-    Here, we adapt it for sequential recommendation tasks --- the average representation of
-    the model outputs in each step is treated as user embeddings, and we minimize the LogDet
-    of the covariance matrix of user and item embeddings to encourage decorrelation among the
-    dimensions. Note that the alignment term in the original LogDet paper, which is originally
-    MSE loss, is replaced with the standard BCE loss for recommendation.
-
     No additional training arguments are required beyond those provided by the base class.
+
+    .. note::
+        Here, we adapt it for sequential recommendation tasks --- the average representation of
+        the model outputs in each step is treated as user embeddings, and we minimize the LogDet
+        of the covariance matrix of user and item embeddings to encourage decorrelation among the
+        dimensions. Note that the alignment term in the original LogDet paper, which is originally
+        MSE loss, is replaced with the standard BCE loss for recommendation.
+
+    References:
+        - Mitigating the Popularity Bias of Graph Collaborative Filtering: A Dimensional Collapse Perspective. NeurIPS '23.
+
     """
 
     args: LogDetSeqRecTrainingArguments

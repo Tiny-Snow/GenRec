@@ -47,7 +47,7 @@ class DROSSeqRecTrainingArguments(SeqRecTrainingArguments):
 class DROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, DROSSeqRecTrainingArguments]):
     """DROS Trainer for Sequential Recommendation Tasks.
 
-    This trainer extends the base `SeqRecTrainer` to implement the dros regularization
+    This trainer extends the base `SeqRecTrainer` to implement the DROS regularization
     loss function, which is commonly used in sequential recommendation tasks to incorporate
     distributionally robust optimization (DRO) principles into the training process. No
     additional training arguments are required beyond those provided by the base class.
