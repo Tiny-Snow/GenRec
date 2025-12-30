@@ -90,15 +90,18 @@ def test_sasrec_spring_power_iteration_registers_and_updates_buffers():
     )
     model = SASRecSpringModel(config)
 
-    weight_first = torch.tensor([[3.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+    torch.manual_seed(0)
+    weight_first = torch.randn(3, 3, dtype=torch.float32)
+    sigma_first_expected = torch.linalg.svdvals(weight_first)[0]
     sigma_first = model._power_iteration(weight_first, name="probe")
-    torch.testing.assert_close(sigma_first, torch.tensor(3.0), atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(sigma_first, sigma_first_expected, atol=1e-4, rtol=1e-4)
     assert hasattr(model, "probe_u") and hasattr(model, "probe_v")
     first_u = model.probe_u.clone()
 
-    weight_second = torch.tensor([[1.0, 0.0], [0.0, 4.0]], dtype=torch.float32)
+    weight_second = torch.randn(3, 3, dtype=torch.float32)
+    sigma_second_expected = torch.linalg.svdvals(weight_second)[0]
     sigma_second = model._power_iteration(weight_second, name="probe")
-    torch.testing.assert_close(sigma_second, torch.tensor(4.0), atol=1e-4, rtol=1e-4)
+    torch.testing.assert_close(sigma_second, sigma_second_expected, atol=1e-4, rtol=1e-4)
     assert not torch.allclose(model.probe_u, first_u)
 
     # calling without a name should not create persistent buffers
