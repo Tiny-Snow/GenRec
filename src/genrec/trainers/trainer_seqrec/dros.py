@@ -47,9 +47,10 @@ class DROSSeqRecTrainingArguments(SeqRecTrainingArguments):
 class DROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, DROSSeqRecTrainingArguments]):
     """DROS Trainer for Sequential Recommendation Tasks.
 
-    This trainer extends the base `SeqRecTrainer` to implement the softmax
-    loss function, which is commonly used in sequential recommendation tasks. No additional
-    training arguments are required beyond those provided by the base class.
+    This trainer extends the base `SeqRecTrainer` to implement the dros regularization
+    loss function, which is commonly used in sequential recommendation tasks to incorporate
+    distributionally robust optimization (DRO) principles into the training process. No
+    additional training arguments are required beyond those provided by the base class.
 
     .. note::
         In the original DROS implementation, we correct two critical issues in the loss
