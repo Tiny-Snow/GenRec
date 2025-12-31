@@ -461,9 +461,9 @@ def main(
         template = load_yaml_config(template_path, "Template config")
         search_cfg = load_yaml_config(search_path, "Search config")
         with open(os.path.join(exp_dir, "base.yaml"), "w") as f:
-            yaml.safe_dump(template, f)
+            yaml.safe_dump(template, f, sort_keys=False)
         with open(os.path.join(exp_dir, "search.yaml"), "w") as f:
-            yaml.safe_dump(search_cfg, f)
+            yaml.safe_dump(search_cfg, f, sort_keys=False)
     else:
         if not os.path.exists(exp_dir):
             raise FileNotFoundError(f"Experiment directory {exp_dir} does not exist.")
