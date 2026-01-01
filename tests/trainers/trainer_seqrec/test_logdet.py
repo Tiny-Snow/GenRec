@@ -15,7 +15,12 @@ from tests.trainers.trainer_seqrec.helpers import (
 
 
 def test_logdet_seqrec_trainer_backward_pass(tmp_path: Path) -> None:
-    args = build_training_args(tmp_path, args_cls=LogDetSeqRecTrainingArguments, logdet_weight=0.7)
+    args = build_training_args(
+        tmp_path,
+        args_cls=LogDetSeqRecTrainingArguments,
+        logdet_user_weight=0.7,
+        logdet_item_weight=0.7,
+    )
     model = DummySeqRecModel(SeqRecModelConfig(item_size=24, hidden_size=4))
     dataset = DummySeqRecDataset(seq_len=3, num_negatives=2, item_size=model.config.item_size)
     trainer = LogDetSeqRecTrainer(
