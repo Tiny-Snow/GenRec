@@ -47,9 +47,9 @@ class DROSSeqRecTrainingArguments(SeqRecTrainingArguments):
 class DROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, DROSSeqRecTrainingArguments]):
     """DROS Trainer for Sequential Recommendation Tasks.
 
-    This trainer extends the base `SeqRecTrainer` to implement the DROS regularization
-    loss function, which is commonly used in sequential recommendation tasks to incorporate
-    distributionally robust optimization (DRO) principles into the training process. No
+    This trainer extends the base `SeqRecTrainer` to implement the ReSN regularization
+    loss function (Regulation with Spectral Norm), which aims to constrain the spectral
+    norm of the predicted user-item interaction matrix to mitigate popularity bias. No
     additional training arguments are required beyond those provided by the base class.
 
     .. note::
@@ -58,11 +58,6 @@ class DROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, DROSSeqRecTrainingArguments]
         scores rather than the probabilities after sigmoid; (2) the popularity-based weights are
         incorrectly applied to the MSE loss, while they should be applied to the exponentiated
         MSE loss. We have fixed these issues in this implementation.
-
-    .. note::
-        In this implementation, we use the global item popularity computed from the entire
-        dataset (including training, validation, and test sets). This is due to the i.i.d.
-        assumption. We may consider using only the training set in future versions.
 
     Reference:
         - A Generic Learning Framework for Sequential Recommendation with Distribution Shifts. SIGIR '23.
