@@ -32,6 +32,13 @@ __all__ += [
     "LogDetSeqRecTrainingArguments",
 ]
 
+from .resn import ReSNSeqRecTrainer, ReSNSeqRecTrainingArguments
+
+__all__ += [
+    "ReSNSeqRecTrainer",
+    "ReSNSeqRecTrainingArguments",
+]
+
 from .sl import SLSeqRecTrainer, SLSeqRecTrainingArguments
 
 __all__ += [
