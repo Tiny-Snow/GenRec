@@ -26,9 +26,14 @@ _SeqRecModel = TypeVar("_SeqRecModel", bound="SeqRecModel[Any, Any]")
 class LogDetSeqRecTrainingArguments(SeqRecTrainingArguments):
     """Training arguments for `LogDetSeqRecTrainer`."""
 
-    logdet_weight: float = field(
+    logdet_user_weight: float = field(
         default=1.0,
-        metadata={"help": "Weight for the LogDet loss component."},
+        metadata={"help": "Weight for the LogDet loss of user embeddings."},
+    )
+
+    logdet_item_weight: float = field(
+        default=1.0,
+        metadata={"help": "Weight for the LogDet loss of item embeddings."},
     )
 
 
@@ -114,13 +119,15 @@ class LogDetSeqRecTrainer(SeqRecTrainer[_SeqRecModel, LogDetSeqRecTrainingArgume
         item_emb: Float[torch.Tensor, "I d"] = self.model.item_embed.weight[1:]  # exclude padding item
         item_cov: Float[torch.Tensor, "d d"] = item_emb.T @ item_emb
 
+        user_cov = user_cov + 1e-6 * torch.eye(user_cov.size(0), device=user_cov.device)
+        item_cov = item_cov + 1e-6 * torch.eye(item_cov.size(0), device=item_cov.device)
+
         # calculate LogDet regularization loss, add a small identity for numerical stability
-        logdet_loss: Float[torch.Tensor, ""]
-        logdet_loss = (user_cov + item_cov).trace() - torch.linalg.slogdet(
-            user_cov @ item_cov + 1e-6 * torch.eye(user_cov.size(0), device=user_cov.device)
-        ).logabsdet
+        user_logdet_loss = user_cov.trace() - torch.linalg.slogdet(user_cov).logabsdet
+        item_logdet_loss = item_cov.trace() - torch.linalg.slogdet(item_cov).logabsdet
+        logdet_loss = user_logdet_loss * self.args.logdet_user_weight + item_logdet_loss * self.args.logdet_item_weight
 
         # combine BCE loss and LogDet loss
-        loss: Float[torch.Tensor, ""] = bce_loss + self.args.logdet_weight * logdet_loss
+        loss: Float[torch.Tensor, ""] = bce_loss + logdet_loss
 
         return loss
