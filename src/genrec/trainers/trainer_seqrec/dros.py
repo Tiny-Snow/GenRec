@@ -49,8 +49,7 @@ class DROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, DROSSeqRecTrainingArguments]
 
     This trainer extends the base `SeqRecTrainer` to implement the ReSN regularization
     loss function (Regulation with Spectral Norm), which aims to constrain the spectral
-    norm of the predicted user-item interaction matrix to mitigate popularity bias. No
-    additional training arguments are required beyond those provided by the base class.
+    norm of the predicted user-item interaction matrix to mitigate popularity bias.
 
     .. note::
         In the original DROS implementation, we correct two critical issues in the loss

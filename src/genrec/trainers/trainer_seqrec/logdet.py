@@ -43,7 +43,6 @@ class LogDetSeqRecTrainer(SeqRecTrainer[_SeqRecModel, LogDetSeqRecTrainingArgume
 
     This trainer extends the base `SeqRecTrainer` to implement the LogDet regularization
     loss function, a well-known redundancy reduction method in graph collaborative filtering.
-    No additional training arguments are required beyond those provided by the base class.
 
     .. note::
         Here, we adapt it for sequential recommendation tasks --- the average representation of

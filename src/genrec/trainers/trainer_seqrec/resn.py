@@ -38,8 +38,7 @@ class ReSNSeqRecTrainer(SeqRecTrainer[_SeqRecModel, ReSNSeqRecTrainingArguments]
 
     This trainer extends the base `SeqRecTrainer` to implement the ReSN regularization
     loss function, a SOTA spectral-norm-based popularity debiasing method in collaborative
-    filtering. No additional training arguments are required beyond those provided by the
-    base class.
+    filtering.
 
     .. note::
         Here, we adapt it for sequential recommendation tasks --- the average representation of
