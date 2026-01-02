@@ -47,7 +47,6 @@ class ReSNSeqRecTrainer(SeqRecTrainer[_SeqRecModel, ReSNSeqRecTrainingArguments]
 
     References:
         - How Do Recommendation Models Amplify Popularity Bias? An Analysis from the Spectral Perspective. WSDM '25.
-
     """
 
     args: ReSNSeqRecTrainingArguments
@@ -102,10 +101,10 @@ class ReSNSeqRecTrainer(SeqRecTrainer[_SeqRecModel, ReSNSeqRecTrainingArguments]
         bce_loss = positive_bce_loss + negative_bce_loss
 
         # get average user embedding for each sequence in the batch
+        # NOTE: average over all positions including padding leads to better stability
         attention_mask: Bool[torch.Tensor, "B L"] = inputs["attention_mask"].bool()
         user_emb_sum: Float[torch.Tensor, "B d"] = torch.sum(user_emb * attention_mask.unsqueeze(-1), dim=1)
-        valid_lengths: Float[torch.Tensor, "B"] = attention_mask.sum(dim=1).clamp(min=1).to(user_emb.dtype)
-        user_emb_avg: Float[torch.Tensor, "B d"] = user_emb_sum / valid_lengths.unsqueeze(-1)
+        user_emb_avg: Float[torch.Tensor, "B d"] = user_emb_sum / attention_mask.size(1)
 
         # compute ReSN regularization loss
         item_emb: Float[torch.Tensor, "I d"] = self.model.item_embed.weight[1:]  # exclude padding item

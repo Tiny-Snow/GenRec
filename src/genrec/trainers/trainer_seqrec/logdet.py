@@ -109,10 +109,10 @@ class LogDetSeqRecTrainer(SeqRecTrainer[_SeqRecModel, LogDetSeqRecTrainingArgume
         bce_loss = positive_bce_loss + negative_bce_loss
 
         # get average user embedding for each sequence in the batch
+        # NOTE: average over all positions including padding leads to better stability
         attention_mask: Bool[torch.Tensor, "B L"] = inputs["attention_mask"].bool()
         user_emb_sum: Float[torch.Tensor, "B d"] = torch.sum(user_emb * attention_mask.unsqueeze(-1), dim=1)
-        valid_lengths: Float[torch.Tensor, "B"] = attention_mask.sum(dim=1).clamp(min=1).to(user_emb.dtype)
-        user_emb_avg: Float[torch.Tensor, "B d"] = user_emb_sum / valid_lengths.unsqueeze(-1)
+        user_emb_avg: Float[torch.Tensor, "B d"] = user_emb_sum / attention_mask.size(1)
 
         # get non-normalized user and item covariance matrix
         user_cov: Float[torch.Tensor, "d d"] = user_emb_avg.T @ user_emb_avg
