@@ -18,6 +18,13 @@ __all__ += [
     "BCESeqRecTrainingArguments",
 ]
 
+from .d2lr import D2LRSeqRecTrainer, D2LRSeqRecTrainingArguments
+
+__all__ += [
+    "D2LRSeqRecTrainer",
+    "D2LRSeqRecTrainingArguments",
+]
+
 from .dros import DROSSeqRecTrainer, DROSSeqRecTrainingArguments
 
 __all__ += [
