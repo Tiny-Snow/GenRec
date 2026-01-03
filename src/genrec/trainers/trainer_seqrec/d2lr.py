@@ -111,10 +111,9 @@ class D2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, D2LRSeqRecTrainingArguments]
         popularity_positive: Float[torch.Tensor, "M"]
         popularity_positive = item_popularity[positive_items.flatten()[attention_mask_flat]]
         popularity_positive = popularity_positive.clamp(min=1.0)
-        popularity_positive = (popularity_positive / all_popularity).pow(self.args.d2lr_ips_temperature)
 
         ips: Float[torch.Tensor, "M"]
-        ips = 1.0 / popularity_positive.clamp(min=1.0)
+        ips = (all_popularity / popularity_positive).pow(self.args.d2lr_ips_temperature)
         ips = ips / ips.mean()  # normalize to ensure gradient stability
 
         loss = (bce_loss * ips).mean()
