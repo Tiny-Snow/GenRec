@@ -26,8 +26,8 @@ class SLSeqRecTrainingArguments(SeqRecTrainingArguments):
     """Training arguments for `SLSeqRecTrainer`."""
 
     sl_temperature: float = field(
-        default=1.0,
-        metadata={"help": "Temperature parameter for Softmax Loss."},
+        default=0.05,
+        metadata={"help": "Temperature parameter for Softmax Loss. Default is 0.05."},
     )
 
 

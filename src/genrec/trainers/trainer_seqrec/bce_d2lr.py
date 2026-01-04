@@ -28,8 +28,8 @@ class BCED2LRSeqRecTrainingArguments(SeqRecTrainingArguments):
     """Training arguments for `BCED2LRSeqRecTrainer`."""
 
     d2lr_ips_temperature: float = field(
-        default=1.0,
-        metadata={"help": "Temperature parameter for IPS weighting in D2LR."},
+        default=0.1,
+        metadata={"help": "Temperature parameter for IPS weighting in D2LR. Default is 0.1."},
     )
 
 

@@ -27,13 +27,13 @@ class BCELogDetSeqRecTrainingArguments(SeqRecTrainingArguments):
     """Training arguments for `BCELogDetSeqRecTrainer`."""
 
     logdet_user_weight: float = field(
-        default=1.0,
-        metadata={"help": "Weight for the LogDet loss of user embeddings."},
+        default=0.0,
+        metadata={"help": "Weight for the LogDet loss of user embeddings. Default is 0.0."},
     )
 
     logdet_item_weight: float = field(
-        default=1.0,
-        metadata={"help": "Weight for the LogDet loss of item embeddings."},
+        default=0.001,
+        metadata={"help": "Weight for the LogDet loss of item embeddings. Default is 0.001."},
     )
 
 

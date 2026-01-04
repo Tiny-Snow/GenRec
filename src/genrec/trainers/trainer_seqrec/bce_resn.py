@@ -27,8 +27,8 @@ class BCEReSNSeqRecTrainingArguments(SeqRecTrainingArguments):
     """Training arguments for `BCEReSNSeqRecTrainer`."""
 
     resn_weight: float = field(
-        default=1.0,
-        metadata={"help": "Weight for the ReSN loss component, i.e., β in the ReSN paper."},
+        default=0.0001,
+        metadata={"help": "Weight for the ReSN loss component, i.e., β in the ReSN paper. Default is 0.0001."},
     )
 
 

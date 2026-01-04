@@ -29,17 +29,17 @@ class BCEDROSSeqRecTrainingArguments(SeqRecTrainingArguments):
 
     dros_temperature: float = field(
         default=0.5,
-        metadata={"help": "Temperature parameter for DROS, i.e., β_0 in the DROS paper."},
+        metadata={"help": "Temperature parameter for DROS, i.e., β_0 in the DROS paper. Default is 0.5."},
     )
 
     dros_weight: float = field(
         default=0.1,
-        metadata={"help": "Weight for the DROS loss component, i.e., α in the DROS paper."},
+        metadata={"help": "Weight for the DROS loss component, i.e., α in the DROS paper. Default is 0.1."},
     )
 
     popularity_temperature: float = field(
         default=0.05,
-        metadata={"help": "Temperature parameter for popularity in DROS, i.e., γ in the DROS paper."},
+        metadata={"help": "Temperature parameter for popularity in DROS, i.e., γ in the DROS paper. Default is 0.05."},
     )
 
 

@@ -28,9 +28,9 @@ class SASRecSpringModelConfig(SASRecModelConfig):
     def __init__(
         self,
         spring_attention_weight: float = 1.0,
-        spring_ffn_weight: float = 1.0,
-        spring_emb_weight: float = 1.0,
-        spring_attention_temperature: float = 1.0,
+        spring_ffn_weight: float = 0.001,
+        spring_emb_weight: float = 0.1,
+        spring_attention_temperature: float = 4.0,
         spectral_norm_iters: int = 1,
         **kwargs,
     ) -> None:
@@ -40,11 +40,11 @@ class SASRecSpringModelConfig(SASRecModelConfig):
             spring_attention_weight (float): Weight for the Spring regularization on
                 attention module. Default is 1.0.
             spring_ffn_weight (float): Weight for the Spring regularization on feed-forward
-                network module. Default is 1.0.
+                network module. Default is 0.001.
             spring_emb_weight (float): Weight for the Spring regularization on item
-                embedding matrix. Default is 1.0.
+                embedding matrix. Default is 0.1.
             spring_attention_temperature (float): Temperature for the Spring regularization
-                on attention module. Default is 1.0.
+                on attention module. Default is 4.0.
             spectral_norm_iters (int): Number of power iteration steps for spectral norm
                 estimation. Default is 1.
             **kwargs (Any): Additional keyword arguments for the base `SASRecModelConfig`.
