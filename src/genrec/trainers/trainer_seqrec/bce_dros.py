@@ -1,4 +1,4 @@
-"""DROS Trainer for Sequential Recommendation Tasks."""
+"""BCE + DROS Trainer for Sequential Recommendation Tasks."""
 
 from __future__ import annotations
 
@@ -14,18 +14,18 @@ from ...models import SeqRecModel, SeqRecOutput
 from .base import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, SeqRecTrainingArgumentsFactory
 
 __all__ = [
-    "DROSSeqRecTrainer",
-    "DROSSeqRecTrainingArguments",
+    "BCEDROSSeqRecTrainer",
+    "BCEDROSSeqRecTrainingArguments",
 ]
 
 
 _SeqRecModel = TypeVar("_SeqRecModel", bound="SeqRecModel[Any, Any]")
 
 
-@SeqRecTrainingArgumentsFactory.register("dros")
+@SeqRecTrainingArgumentsFactory.register("bce_dros")
 @dataclass
-class DROSSeqRecTrainingArguments(SeqRecTrainingArguments):
-    """Training arguments for `DROSSeqRecTrainer`."""
+class BCEDROSSeqRecTrainingArguments(SeqRecTrainingArguments):
+    """Training arguments for `BCEDROSSeqRecTrainer`."""
 
     dros_temperature: float = field(
         default=0.5,
@@ -43,8 +43,8 @@ class DROSSeqRecTrainingArguments(SeqRecTrainingArguments):
     )
 
 
-@SeqRecTrainerFactory.register("dros")
-class DROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, DROSSeqRecTrainingArguments]):
+@SeqRecTrainerFactory.register("bce_dros")
+class BCEDROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCEDROSSeqRecTrainingArguments]):
     """DROS Trainer for Sequential Recommendation Tasks.
 
     This trainer extends the base `SeqRecTrainer` to implement the ReSN regularization
@@ -62,7 +62,7 @@ class DROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, DROSSeqRecTrainingArguments]
         - A Generic Learning Framework for Sequential Recommendation with Distribution Shifts. SIGIR '23.
     """
 
-    args: DROSSeqRecTrainingArguments
+    args: BCEDROSSeqRecTrainingArguments
     model: _SeqRecModel
 
     def compute_rec_loss(

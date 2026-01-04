@@ -1,4 +1,4 @@
-"""LogDet Trainer for Sequential Recommendation Tasks."""
+"""BCE + LogDet Trainer for Sequential Recommendation Tasks."""
 
 from __future__ import annotations
 
@@ -13,18 +13,18 @@ from ...models import SeqRecModel, SeqRecOutput
 from .base import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, SeqRecTrainingArgumentsFactory
 
 __all__ = [
-    "LogDetSeqRecTrainingArguments",
-    "LogDetSeqRecTrainer",
+    "BCELogDetSeqRecTrainingArguments",
+    "BCELogDetSeqRecTrainer",
 ]
 
 
 _SeqRecModel = TypeVar("_SeqRecModel", bound="SeqRecModel[Any, Any]")
 
 
-@SeqRecTrainingArgumentsFactory.register("logdet")
+@SeqRecTrainingArgumentsFactory.register("bce_logdet")
 @dataclass
-class LogDetSeqRecTrainingArguments(SeqRecTrainingArguments):
-    """Training arguments for `LogDetSeqRecTrainer`."""
+class BCELogDetSeqRecTrainingArguments(SeqRecTrainingArguments):
+    """Training arguments for `BCELogDetSeqRecTrainer`."""
 
     logdet_user_weight: float = field(
         default=1.0,
@@ -37,8 +37,8 @@ class LogDetSeqRecTrainingArguments(SeqRecTrainingArguments):
     )
 
 
-@SeqRecTrainerFactory.register("logdet")
-class LogDetSeqRecTrainer(SeqRecTrainer[_SeqRecModel, LogDetSeqRecTrainingArguments]):
+@SeqRecTrainerFactory.register("bce_logdet")
+class BCELogDetSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCELogDetSeqRecTrainingArguments]):
     """LogDet Trainer for Sequential Recommendation Tasks.
 
     This trainer extends the base `SeqRecTrainer` to implement the LogDet regularization
@@ -56,7 +56,7 @@ class LogDetSeqRecTrainer(SeqRecTrainer[_SeqRecModel, LogDetSeqRecTrainingArgume
 
     """
 
-    args: LogDetSeqRecTrainingArguments
+    args: BCELogDetSeqRecTrainingArguments
     model: _SeqRecModel
 
     def compute_rec_loss(

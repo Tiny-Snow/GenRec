@@ -1,4 +1,4 @@
-"""D2LR Trainer for Sequential Recommendation Tasks."""
+"""BCE + D2LR Trainer for Sequential Recommendation Tasks."""
 
 from __future__ import annotations
 
@@ -14,18 +14,18 @@ from ...models import SeqRecModel, SeqRecOutput
 from .base import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, SeqRecTrainingArgumentsFactory
 
 __all__ = [
-    "D2LRSeqRecTrainingArguments",
-    "D2LRSeqRecTrainer",
+    "BCED2LRSeqRecTrainer",
+    "BCED2LRSeqRecTrainingArguments",
 ]
 
 
 _SeqRecModel = TypeVar("_SeqRecModel", bound="SeqRecModel[Any, Any]")
 
 
-@SeqRecTrainingArgumentsFactory.register("d2lr")
+@SeqRecTrainingArgumentsFactory.register("bce_d2lr")
 @dataclass
-class D2LRSeqRecTrainingArguments(SeqRecTrainingArguments):
-    """Training arguments for `D2LRSeqRecTrainer`."""
+class BCED2LRSeqRecTrainingArguments(SeqRecTrainingArguments):
+    """Training arguments for `BCED2LRSeqRecTrainer`."""
 
     d2lr_ips_temperature: float = field(
         default=1.0,
@@ -33,8 +33,8 @@ class D2LRSeqRecTrainingArguments(SeqRecTrainingArguments):
     )
 
 
-@SeqRecTrainerFactory.register("d2lr")
-class D2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, D2LRSeqRecTrainingArguments]):
+@SeqRecTrainerFactory.register("bce_d2lr")
+class BCED2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCED2LRSeqRecTrainingArguments]):
     """D2LR Trainer for Sequential Recommendation Tasks.
 
     This trainer extends the base `SeqRecTrainer` to implement the D2LR loss function, a
@@ -47,7 +47,7 @@ class D2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, D2LRSeqRecTrainingArguments]
         - Dual Debiasing in LLM-based Recommendation. SIGIR '25.
     """
 
-    args: D2LRSeqRecTrainingArguments
+    args: BCED2LRSeqRecTrainingArguments
     model: _SeqRecModel
 
     def compute_rec_loss(

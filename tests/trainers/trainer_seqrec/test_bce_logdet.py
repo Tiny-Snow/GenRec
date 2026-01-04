@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 
 from genrec.models.model_seqrec.base import SeqRecModelConfig
-from genrec.trainers.trainer_seqrec.d2lr import D2LRSeqRecTrainer, D2LRSeqRecTrainingArguments
+from genrec.trainers.trainer_seqrec.bce_logdet import BCELogDetSeqRecTrainer, BCELogDetSeqRecTrainingArguments
 from tests.trainers.trainer_seqrec.helpers import (
     DummySeqRecCollator,
     DummySeqRecDataset,
@@ -14,15 +14,16 @@ from tests.trainers.trainer_seqrec.helpers import (
 )
 
 
-def test_d2lr_seqrec_trainer_backward_pass(tmp_path: Path) -> None:
+def test_bce_logdet_seqrec_trainer_backward_pass(tmp_path: Path) -> None:
     args = build_training_args(
         tmp_path,
-        args_cls=D2LRSeqRecTrainingArguments,
-        d2lr_ips_temperature=0.5,
+        args_cls=BCELogDetSeqRecTrainingArguments,
+        logdet_user_weight=0.7,
+        logdet_item_weight=0.7,
     )
     model = DummySeqRecModel(SeqRecModelConfig(item_size=24, hidden_size=4))
     dataset = DummySeqRecDataset(seq_len=3, num_negatives=2, item_size=model.config.item_size)
-    trainer = D2LRSeqRecTrainer(
+    trainer = BCELogDetSeqRecTrainer(
         model=model,
         args=args,
         data_collator=DummySeqRecCollator(),

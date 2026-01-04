@@ -18,32 +18,32 @@ __all__ += [
     "BCESeqRecTrainingArguments",
 ]
 
-from .d2lr import D2LRSeqRecTrainer, D2LRSeqRecTrainingArguments
+from .bce_d2lr import BCED2LRSeqRecTrainer, BCED2LRSeqRecTrainingArguments
 
 __all__ += [
-    "D2LRSeqRecTrainer",
-    "D2LRSeqRecTrainingArguments",
+    "BCED2LRSeqRecTrainer",
+    "BCED2LRSeqRecTrainingArguments",
 ]
 
-from .dros import DROSSeqRecTrainer, DROSSeqRecTrainingArguments
+from .bce_dros import BCEDROSSeqRecTrainer, BCEDROSSeqRecTrainingArguments
 
 __all__ += [
-    "DROSSeqRecTrainer",
-    "DROSSeqRecTrainingArguments",
+    "BCEDROSSeqRecTrainer",
+    "BCEDROSSeqRecTrainingArguments",
 ]
 
-from .logdet import LogDetSeqRecTrainer, LogDetSeqRecTrainingArguments
+from .bce_logdet import BCELogDetSeqRecTrainer, BCELogDetSeqRecTrainingArguments
 
 __all__ += [
-    "LogDetSeqRecTrainer",
-    "LogDetSeqRecTrainingArguments",
+    "BCELogDetSeqRecTrainer",
+    "BCELogDetSeqRecTrainingArguments",
 ]
 
-from .resn import ReSNSeqRecTrainer, ReSNSeqRecTrainingArguments
+from .bce_resn import BCEReSNSeqRecTrainer, BCEReSNSeqRecTrainingArguments
 
 __all__ += [
-    "ReSNSeqRecTrainer",
-    "ReSNSeqRecTrainingArguments",
+    "BCEReSNSeqRecTrainer",
+    "BCEReSNSeqRecTrainingArguments",
 ]
 
 from .sl import SLSeqRecTrainer, SLSeqRecTrainingArguments

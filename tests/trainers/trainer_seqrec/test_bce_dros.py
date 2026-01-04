@@ -7,7 +7,7 @@ import torch
 
 from genrec.models.model_seqrec.base import SeqRecModelConfig, SeqRecOutput
 from genrec.trainers.trainer_seqrec.bce import BCESeqRecTrainer
-from genrec.trainers.trainer_seqrec.dros import DROSSeqRecTrainer, DROSSeqRecTrainingArguments
+from genrec.trainers.trainer_seqrec.bce_dros import BCEDROSSeqRecTrainer, BCEDROSSeqRecTrainingArguments
 from tests.trainers.trainer_seqrec.helpers import (
     DummySeqRecCollator,
     DummySeqRecDataset,
@@ -16,7 +16,7 @@ from tests.trainers.trainer_seqrec.helpers import (
 )
 
 
-def test_dros_seqrec_trainer_respects_dro_weight(tmp_path: Path) -> None:
+def test_bce_dros_seqrec_trainer_respects_dro_weight(tmp_path: Path) -> None:
     base_model = DummySeqRecModel(SeqRecModelConfig(item_size=32, hidden_size=4))
     dataset = DummySeqRecDataset(seq_len=3, num_negatives=2, item_size=base_model.config.item_size)
     collator = DummySeqRecCollator()
@@ -47,8 +47,8 @@ def test_dros_seqrec_trainer_respects_dro_weight(tmp_path: Path) -> None:
     )
     base_loss = bce_trainer.compute_rec_loss(inputs, outputs)
 
-    dros_args_zero = build_training_args(tmp_path, args_cls=DROSSeqRecTrainingArguments, dros_weight=0.0)
-    dros_trainer_zero = DROSSeqRecTrainer(
+    dros_args_zero = build_training_args(tmp_path, args_cls=BCEDROSSeqRecTrainingArguments, dros_weight=0.0)
+    dros_trainer_zero = BCEDROSSeqRecTrainer(
         model=copy.deepcopy(base_model),
         args=dros_args_zero,
         data_collator=collator,
@@ -58,8 +58,8 @@ def test_dros_seqrec_trainer_respects_dro_weight(tmp_path: Path) -> None:
     dro_disabled_loss = dros_trainer_zero.compute_rec_loss(inputs, outputs)
     torch.testing.assert_close(dro_disabled_loss, base_loss)
 
-    dros_args_weighted = build_training_args(tmp_path, args_cls=DROSSeqRecTrainingArguments, dros_weight=0.3)
-    dros_trainer_weighted = DROSSeqRecTrainer(
+    dros_args_weighted = build_training_args(tmp_path, args_cls=BCEDROSSeqRecTrainingArguments, dros_weight=0.3)
+    dros_trainer_weighted = BCEDROSSeqRecTrainer(
         model=copy.deepcopy(base_model),
         args=dros_args_weighted,
         data_collator=collator,

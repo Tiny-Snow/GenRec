@@ -1,4 +1,4 @@
-"""ReSN Trainer for Sequential Recommendation Tasks."""
+"""BCE + ReSN Trainer for Sequential Recommendation Tasks."""
 
 from __future__ import annotations
 
@@ -13,18 +13,18 @@ from ...models import SeqRecModel, SeqRecOutput
 from .base import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, SeqRecTrainingArgumentsFactory
 
 __all__ = [
-    "ReSNSeqRecTrainingArguments",
-    "ReSNSeqRecTrainer",
+    "BCEReSNSeqRecTrainingArguments",
+    "BCEReSNSeqRecTrainer",
 ]
 
 
 _SeqRecModel = TypeVar("_SeqRecModel", bound="SeqRecModel[Any, Any]")
 
 
-@SeqRecTrainingArgumentsFactory.register("resn")
+@SeqRecTrainingArgumentsFactory.register("bce_resn")
 @dataclass
-class ReSNSeqRecTrainingArguments(SeqRecTrainingArguments):
-    """Training arguments for `ReSNSeqRecTrainer`."""
+class BCEReSNSeqRecTrainingArguments(SeqRecTrainingArguments):
+    """Training arguments for `BCEReSNSeqRecTrainer`."""
 
     resn_weight: float = field(
         default=1.0,
@@ -32,8 +32,8 @@ class ReSNSeqRecTrainingArguments(SeqRecTrainingArguments):
     )
 
 
-@SeqRecTrainerFactory.register("resn")
-class ReSNSeqRecTrainer(SeqRecTrainer[_SeqRecModel, ReSNSeqRecTrainingArguments]):
+@SeqRecTrainerFactory.register("bce_resn")
+class BCEReSNSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCEReSNSeqRecTrainingArguments]):
     """ReSN Trainer for Sequential Recommendation Tasks.
 
     This trainer extends the base `SeqRecTrainer` to implement the ReSN regularization
@@ -48,7 +48,7 @@ class ReSNSeqRecTrainer(SeqRecTrainer[_SeqRecModel, ReSNSeqRecTrainingArguments]
         - How Do Recommendation Models Amplify Popularity Bias? An Analysis from the Spectral Perspective. WSDM '25.
     """
 
-    args: ReSNSeqRecTrainingArguments
+    args: BCEReSNSeqRecTrainingArguments
     model: _SeqRecModel
 
     def compute_rec_loss(
