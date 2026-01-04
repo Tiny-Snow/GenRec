@@ -13,6 +13,7 @@ from .base import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, 
 
 __all__ = [
     "SLSeqRecTrainer",
+    "SLSeqRecTrainingArguments",
 ]
 
 
