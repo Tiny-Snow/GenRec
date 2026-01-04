@@ -58,8 +58,7 @@ class SASRecModelConfig(SeqRecModelConfig):
 class SASRecModelOutput(SeqRecOutput):
     """Output class for SASRec model.
 
-    The `SASRecModelOutput` extends the base `SeqRecOutput`
-    without adding any additional attributes.
+    The `SASRecModelOutput` extends the base `SeqRecOutput` without adding any additional attributes.
     """
 
     pass
