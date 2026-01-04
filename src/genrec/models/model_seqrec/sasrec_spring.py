@@ -22,7 +22,8 @@ __all__ = [
 
 @SeqRecModelConfigFactory.register("sasrec_spring")
 class SASRecSpringModelConfig(SASRecModelConfig):
-    """Configuration class for SASRec model, which extends `SASRecModelConfig`."""
+    """Configuration class for SASRec model with Spring regularization, which
+    extends `SASRecModelConfig`."""
 
     def __init__(
         self,
