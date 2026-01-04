@@ -40,9 +40,11 @@ class SASRecModelConfig(SeqRecModelConfig):
         """Initializes the configuration with model hyperparameters.
 
         Args:
-            attention_dropout (float): Dropout rate for attention weights.
+            attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
             attention_bias (bool): Whether to include bias terms in the attention projections.
+                Default is False.
             ffn_bias (bool): Whether to include bias terms in the feed-forward network projections.
+                Default is False.
             **kwargs (Any): Additional keyword arguments for the base `SeqRecModelConfig`.
         """
         super().__init__(**kwargs)
