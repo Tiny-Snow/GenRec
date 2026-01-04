@@ -191,7 +191,7 @@ class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], A
             config (_SeqRecModelConfig): Configuration containing model hyperparameters.
         """
         super().__init__(config)
-        self.item_embed = nn.Embedding(config.item_size + 1, config.hidden_size, padding_idx=0)
+        self._item_embed = nn.Embedding(config.item_size + 1, config.hidden_size, padding_idx=0)
 
     def embed_tokens(
         self,
@@ -205,7 +205,7 @@ class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], A
         Returns:
             Float[torch.Tensor, "B L d"]: Embedded item representations of shape (batch_size, seq_len, hidden_size).
         """
-        return self.item_embed(input_ids)
+        return self._item_embed(input_ids)
 
     @property
     def item_embed_weight(self) -> Float[torch.Tensor, "I+1 d"]:
@@ -214,7 +214,7 @@ class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], A
         Returns:
             Float[torch.Tensor, "I+1 d"]: Item embedding weight matrix of shape (item_size + 1, hidden_size).
         """
-        return self.item_embed.weight
+        return self._item_embed.weight
 
     @abstractmethod
     def forward(  # pragma: no cover - abstract method
