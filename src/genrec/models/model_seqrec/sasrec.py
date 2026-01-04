@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Tuple
 
+from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-from jaxtyping import Float, Int
+import torch.nn.functional as F
 
 from ..modules import LlamaDecoderLayer, RMSNorm, RotaryEmbedding, create_attention_mask
 from .base import (

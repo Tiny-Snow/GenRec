@@ -8,6 +8,7 @@ from typing import Dict
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 from transformers import EvalPrediction
 
 from genrec.models.model_seqrec.base import SeqRecModelConfig
@@ -213,6 +214,32 @@ def test_seqrec_trainer_compute_loss_without_model_loss_returns_outputs(
         len(batch),
         model.config.item_size + 1,
     )
+
+
+def test_seqrec_trainer_normalizes_logits_when_enabled(tmp_path: Path) -> None:
+    args = build_training_args(tmp_path, eval_interval=1, norm_embeddings=True)
+    model = DummySeqRecModel(SeqRecModelConfig(item_size=12, hidden_size=4))
+    dataset = DummySeqRecDataset(seq_len=3, num_negatives=2, item_size=model.config.item_size)
+    trainer = MinimalSeqRecTrainer(
+        model=model,
+        args=args,
+        data_collator=DummySeqRecCollator(),
+        train_dataset=dataset,
+        eval_dataset=dataset,
+    )
+
+    batch = [dataset[0], dataset[1]]
+    inputs = trainer.data_collator(batch)
+
+    loss, output_dict = trainer.compute_loss(trainer.model, inputs, return_outputs=True)
+    torch.testing.assert_close(loss, torch.zeros((), device=loss.device))
+
+    forward_outputs = trainer.model(**inputs)
+    last_hidden = forward_outputs.last_hidden_state[:, -1, :]
+    item_embed_weight = trainer.model.item_embed_weight
+    expected_logits = F.normalize(last_hidden, p=2, dim=-1) @ F.normalize(item_embed_weight, p=2, dim=-1).T
+
+    torch.testing.assert_close(output_dict["logits"], expected_logits)
 
 
 def test_seqrec_trainer_predict_returns_metrics(tmp_path: Path) -> None:

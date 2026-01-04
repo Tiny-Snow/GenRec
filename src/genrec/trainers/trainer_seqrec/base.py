@@ -7,10 +7,11 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, Tuple, Type, TypeVar, Union
 
+from jaxtyping import Float, Int
 import numpy as np
 import torch
 import torch.nn as nn
-from jaxtyping import Float, Int
+import torch.nn.functional as F
 from transformers import EvalPrediction, Trainer, TrainerCallback, TrainingArguments
 
 from ...datasets import SeqRecCollator, SeqRecDataset
@@ -111,18 +112,33 @@ class SeqRecTrainingArguments(TrainingArguments):
     """Training arguments for sequential recommendation trainers.
 
     Args:
+        norm_embeddings (bool): Whether to L2-normalize user and item embeddings during loss
+            computation and evaluation. If True, both user and item embeddings are normalized to
+            unit length, and the dot product is equivalent to cosine similarity. Default is False.
         eval_interval (int): Number of epochs between each evaluation. Default is 5.
         metrics (Sequence[Tuple[str, Dict[str, Any]]]): Metric names and their parameters to
-            compute during evaluation. Default is ["hr", "ndcg"].
+            compute during evaluation. Default is [('hr', {}), ('ndcg', {}), ('popularity', {'p': (0.1, 0.2)}),
+            ("unpopularity", {"p": (0.2, 0.4)})].
         model_loss_weight (float): Weight for the model-specific loss when combined with the
-            recommendation loss. Default is 1.0.
+            recommendation loss. Default is 0.0.
         top_k (Sequence[int]): Cutoff values for computing top-K metrics during evaluation.
             Default is [1, 5, 10].
     """
 
+    norm_embeddings: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to L2-normalize user and item embeddings during loss computation and evaluation. "
+                "If True, both user and item embeddings are normalized to unit length, and the dot product "
+                "is equivalent to cosine similarity. Default is False."
+            )
+        },
+    )
+
     eval_interval: int = field(
         default=5,
-        metadata={"help": "Number of epochs between each evaluation."},
+        metadata={"help": "Number of epochs between each evaluation. Default is 5."},
     )
 
     metrics: Sequence[Tuple[str, Dict[str, Any]]] = field(
@@ -132,17 +148,25 @@ class SeqRecTrainingArguments(TrainingArguments):
             ("popularity", {"p": (0.1, 0.2)}),
             ("unpopularity", {"p": (0.2, 0.4)}),
         ],
-        metadata={"help": "List of metric names and their parameters to compute during evaluation."},
+        metadata={
+            "help": (
+                "Metric names and their parameters to compute during evaluation. "
+                "Default is [('hr', {}), ('ndcg', {}), ('popularity', {'p': (0.1, 0.2)}), "
+                "('unpopularity', {'p': (0.2, 0.4)})]."
+            )
+        },
     )
 
     model_loss_weight: float = field(
-        default=1.0,
-        metadata={"help": "Weight for the model-specific loss when combined with the recommendation loss."},
+        default=0.0,
+        metadata={
+            "help": "Weight for the model-specific loss when combined with the recommendation loss. Default is 0.0."
+        },
     )
 
     top_k: Sequence[int] = field(
         default_factory=lambda: [1, 5, 10],
-        metadata={"help": "Cutoff values for computing top-K metrics during evaluation."},
+        metadata={"help": "Cutoff values for computing top-K metrics during evaluation. Default is [1, 5, 10]."},
     )
 
 
@@ -166,12 +190,15 @@ def compute_seqrec_metrics(
         train_dataset (SeqRecDataset): Dataset used during training; required for global metrics
             such as popularity-based measurements.
         top_k (Sequence[int]): Cutoff values for computing top-K metrics, determining how many
-            predictions to consider for each metric.
+            predictions to consider for each metric. Default is (1, 5, 10).
         metrics (Sequence[Tuple[str, Dict[str, Any]]]): Metric specifications, where each tuple
-            comprises the metric name and an optional parameter dictionary.
+            comprises the metric name and an optional parameter dictionary. Default is
+            [('hr', {}), ('ndcg', {}), ('popularity', {'p': (0.1, 0.2)}),
+            ('unpopularity', {'p': (0.2, 0.4)})].
         device (Union[torch.device, str, None]): Device used for metric computations.
+            If None, defaults to CPU. Default is None.
         batch_size (int): Number of samples per chunk when transferring logits/labels to the
-            target device for top-K extraction.
+            target device for top-K extraction. Default is 4096.
 
     Returns:
         Dict[str, float]: Dictionary containing computed metric values keyed by metric name.
@@ -335,6 +362,7 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
                 loss (if provided) with the recommendation loss computed via `compute_rec_loss`.
         """
         model = model.module if hasattr(model, "module") else model  # type: ignore - for distributed training
+        assert isinstance(model, SeqRecModel), "Model must be an instance of SeqRecModel."
 
         outputs: SeqRecOutput = model(
             **inputs,
@@ -342,7 +370,7 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         )
         assert isinstance(outputs, SeqRecOutput), "Model output must be an instance of SeqRecOutput."
 
-        rec_loss = self.compute_rec_loss(inputs, outputs, num_items_in_batch)
+        rec_loss = self.compute_rec_loss(inputs, outputs, num_items_in_batch, self.args.norm_embeddings)
         if outputs.model_loss is not None:
             loss = rec_loss + outputs.model_loss * self.args.model_loss_weight
         else:
@@ -351,8 +379,15 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         if return_outputs:
             last_step_hidden_states: Float[torch.Tensor, "B d"]
             last_step_hidden_states = outputs.last_hidden_state[:, -1, :]
+            item_embed_weight: Float[torch.Tensor, "I+1 d"] = model.item_embed_weight
+
+            if self.args.norm_embeddings:
+                last_step_hidden_states = F.normalize(last_step_hidden_states, p=2, dim=-1)
+                item_embed_weight = F.normalize(item_embed_weight, p=2, dim=-1)
+
             logits: Float[torch.Tensor, "B I+1"]
-            logits = last_step_hidden_states @ model.item_embed.weight.T
+            logits = last_step_hidden_states @ item_embed_weight.T
+
             output_dict: Dict[str, torch.Tensor] = {
                 "loss": loss,
                 "logits": logits,
@@ -367,6 +402,7 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         inputs: dict[str, Union[torch.Tensor, Any]],
         outputs: SeqRecOutput,
         num_items_in_batch: Optional[torch.Tensor] = None,
+        norm_embeddings: bool = False,
     ) -> Float[torch.Tensor, ""]:
         """Computes the recommendation loss for a batch of inputs and model outputs.
 
@@ -376,6 +412,7 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
             outputs (SeqRecOutput): Model outputs from the forward pass.
             num_items_in_batch (Optional[torch.Tensor]): Optional tensor indicating the number of
                 valid items in each sequence in the batch (excluding padding).
+            norm_embeddings (bool): Whether to L2-normalize user and item embeddings. Default is False.
 
         Returns:
             Float[torch.Tensor, ""]: Computed recommendation loss as a scalar tensor.

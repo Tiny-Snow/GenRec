@@ -87,6 +87,7 @@ trainer:
         report_to: ["tensorboard"]
 
         # base trainer parameters
+        norm_embeddings: false  # whether to L2-normalize user and item embeddings
         eval_interval: 5  # run metrics every epoch
         metrics:
         - ["hr", {}]

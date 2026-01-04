@@ -7,9 +7,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Generic, Optional, Tuple, Type, TypeVar, Union
 
+from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-from jaxtyping import Float, Int
+import torch.nn.functional as F
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.utils.generic import ModelOutput
 
@@ -205,6 +206,15 @@ class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], A
             Float[torch.Tensor, "B L d"]: Embedded item representations of shape (batch_size, seq_len, hidden_size).
         """
         return self.item_embed(input_ids)
+
+    @property
+    def item_embed_weight(self) -> Float[torch.Tensor, "I+1 d"]:
+        """Returns the item embedding weight matrix.
+
+        Returns:
+            Float[torch.Tensor, "I+1 d"]: Item embedding weight matrix of shape (item_size + 1, hidden_size).
+        """
+        return self.item_embed.weight
 
     @abstractmethod
     def forward(  # pragma: no cover - abstract method

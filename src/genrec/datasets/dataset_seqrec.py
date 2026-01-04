@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
+from jaxtyping import Float, Int
 import numpy as np
 import pandas as pd
-from jaxtyping import Float, Int
 
 from .base import (
     DatasetSplitLiteral,

@@ -8,10 +8,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, Generic, List, Literal, Mapping, Optional, Sequence, Tuple, Type, TypeVar, Union
 
+from jaxtyping import Float, Int
 import numpy as np
 import pandas as pd
 import torch
-from jaxtyping import Float, Int
 from torch.utils.data import Dataset
 
 from .modules.lm_encoders import LMEncoder

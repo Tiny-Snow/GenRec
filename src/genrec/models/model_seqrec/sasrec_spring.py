@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Tuple
 
+from jaxtyping import Bool, Float, Int
 import torch
 import torch.nn as nn
-from jaxtyping import Bool, Float, Int
 
 from ..modules import LlamaDecoderLayer, RMSNorm, RotaryEmbedding, create_attention_mask
 from .base import SeqRecModel, SeqRecModelConfigFactory, SeqRecModelFactory, SeqRecOutputFactory
@@ -157,7 +157,7 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
 
         # Spring regularization on item embeddings
         if output_model_loss:
-            item_emb_sn = self._power_iteration(self.item_embed.weight, name="item_embed_weight")
+            item_emb_sn = self._power_iteration(self.item_embed_weight, name="item_embed_weight")
             spring_loss_emb = item_emb_sn.log1p()
 
         for layer_idx, layer in enumerate(self.layers):

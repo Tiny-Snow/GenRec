@@ -69,6 +69,7 @@ class MinimalSeqRecTrainer(SeqRecTrainer[DummySeqRecModel, SeqRecTrainingArgumen
         inputs: Dict[str, torch.Tensor],
         outputs: SeqRecOutput,
         num_items_in_batch: torch.Tensor | None = None,
+        norm_embeddings: bool = False,
     ) -> torch.Tensor:
         return torch.zeros((), device=outputs.last_hidden_state.device)
 
@@ -102,6 +103,7 @@ class RecLossTrackingSeqRecTrainer(SeqRecTrainer[DummySeqRecModelWithOptionalLos
         inputs: Dict[str, torch.Tensor],
         outputs: SeqRecOutput,
         num_items_in_batch: torch.Tensor | None = None,
+        norm_embeddings: bool = False,
     ) -> torch.Tensor:
         if num_items_in_batch is not None:
             self.last_seen_num_items = num_items_in_batch.clone()
