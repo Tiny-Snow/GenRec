@@ -16,7 +16,12 @@ from tests.trainers.trainer_seqrec.helpers import (
 
 
 def test_sl_seqrec_trainer_compute_rec_loss_matches_manual(tmp_path: Path) -> None:
-    args = build_training_args(tmp_path, args_cls=SLSeqRecTrainingArguments, sl_temperature=0.5)
+    args = build_training_args(
+        tmp_path,
+        args_cls=SLSeqRecTrainingArguments,
+        sl_temperature=0.5,
+        stepwise_negative_sampling=False,
+    )
     model = DummySeqRecModel(SeqRecModelConfig(item_size=40, hidden_size=4))
     dataset = DummySeqRecDataset(seq_len=2, num_negatives=3, item_size=model.config.item_size)
     trainer = SLSeqRecTrainer(
@@ -52,15 +57,21 @@ def test_sl_seqrec_trainer_compute_rec_loss_matches_manual(tmp_path: Path) -> No
     mask = attention_mask.flatten().bool()
     positive_scores_flat = positive_scores.flatten()[mask]
     negative_scores_flat = negative_scores.reshape(-1, negative_scores.size(-1))[mask]
-    diff_scores = negative_scores_flat - positive_scores_flat.unsqueeze(-1)
     tau = args.sl_temperature
-    expected_loss = (torch.logsumexp(diff_scores / tau, dim=-1) * tau).mean()
+    all_scores = torch.cat([positive_scores_flat.unsqueeze(-1), negative_scores_flat], dim=-1)
+    expected_loss = -F.log_softmax(all_scores / tau, dim=-1)[:, 0].mean()
 
     torch.testing.assert_close(loss, expected_loss)
 
 
 def test_sl_seqrec_trainer_normalization_branch(tmp_path: Path) -> None:
-    args = build_training_args(tmp_path, args_cls=SLSeqRecTrainingArguments, sl_temperature=0.2, norm_embeddings=True)
+    args = build_training_args(
+        tmp_path,
+        args_cls=SLSeqRecTrainingArguments,
+        sl_temperature=0.2,
+        norm_embeddings=True,
+        stepwise_negative_sampling=False,
+    )
     model = DummySeqRecModel(SeqRecModelConfig(item_size=30, hidden_size=4))
     dataset = DummySeqRecDataset(seq_len=2, num_negatives=2, item_size=model.config.item_size)
     trainer = SLSeqRecTrainer(
@@ -96,7 +107,37 @@ def test_sl_seqrec_trainer_normalization_branch(tmp_path: Path) -> None:
     mask = attention_mask.flatten().bool()
     positive_scores_flat = positive_scores.flatten()[mask]
     negative_scores_flat = negative_scores.reshape(-1, negative_scores.size(-1))[mask]
-    diff_scores = negative_scores_flat - positive_scores_flat.unsqueeze(-1)
-    expected = (torch.logsumexp(diff_scores / args.sl_temperature, dim=-1) * args.sl_temperature).mean()
+    all_scores = torch.cat([positive_scores_flat.unsqueeze(-1), negative_scores_flat], dim=-1)
+    expected = -F.log_softmax(all_scores / args.sl_temperature, dim=-1)[:, 0].mean()
 
     torch.testing.assert_close(loss, expected)
+
+
+def test_sl_seqrec_trainer_stepwise_negative_sampling_branch(tmp_path: Path) -> None:
+    torch.manual_seed(0)
+    args = build_training_args(
+        tmp_path,
+        args_cls=SLSeqRecTrainingArguments,
+        sl_temperature=0.3,
+        stepwise_negative_sampling=True,
+        norm_embeddings=True,
+    )
+    model = DummySeqRecModel(SeqRecModelConfig(item_size=28, hidden_size=4))
+    dataset = DummySeqRecDataset(seq_len=3, num_negatives=2, item_size=model.config.item_size)
+    trainer = SLSeqRecTrainer(
+        model=model,
+        args=args,
+        data_collator=DummySeqRecCollator(),
+        train_dataset=dataset,
+        eval_dataset=dataset,
+    )
+
+    batch = [dataset[0], dataset[1]]
+    inputs = trainer.data_collator(batch)
+    outputs = model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"])
+
+    loss = trainer.compute_rec_loss(inputs, outputs)
+    loss_norm = trainer.compute_rec_loss(inputs, outputs, norm_embeddings=True)
+
+    assert torch.isfinite(loss).item()
+    assert torch.isfinite(loss_norm).item()

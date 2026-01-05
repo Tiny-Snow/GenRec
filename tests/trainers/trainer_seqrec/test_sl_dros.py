@@ -37,7 +37,12 @@ def test_sl_dros_seqrec_trainer_respects_dro_weight(tmp_path: Path) -> None:
         "attention_mask": attention_mask,
     }
 
-    sl_args = build_training_args(tmp_path, args_cls=SLSeqRecTrainingArguments, sl_temperature=0.4)
+    sl_args = build_training_args(
+        tmp_path,
+        args_cls=SLSeqRecTrainingArguments,
+        sl_temperature=0.4,
+        stepwise_negative_sampling=False,
+    )
     sl_trainer = SLSeqRecTrainer(
         model=base_model,
         args=sl_args,
@@ -52,6 +57,7 @@ def test_sl_dros_seqrec_trainer_respects_dro_weight(tmp_path: Path) -> None:
         args_cls=SLDROSSeqRecTrainingArguments,
         sl_temperature=0.4,
         dros_weight=0.0,
+        stepwise_negative_sampling=False,
     )
     dros_trainer_zero = SLDROSSeqRecTrainer(
         model=copy.deepcopy(base_model),
@@ -68,6 +74,7 @@ def test_sl_dros_seqrec_trainer_respects_dro_weight(tmp_path: Path) -> None:
         args_cls=SLDROSSeqRecTrainingArguments,
         sl_temperature=0.4,
         dros_weight=0.25,
+        stepwise_negative_sampling=False,
     )
     dros_trainer_weighted = SLDROSSeqRecTrainer(
         model=copy.deepcopy(base_model),
@@ -88,6 +95,7 @@ def test_sl_dros_seqrec_trainer_normalization_branch(tmp_path: Path) -> None:
         sl_temperature=0.35,
         dros_weight=0.1,
         norm_embeddings=True,
+        stepwise_negative_sampling=False,
     )
     model = DummySeqRecModel(SeqRecModelConfig(item_size=20, hidden_size=4))
     dataset = DummySeqRecDataset(seq_len=2, num_negatives=2, item_size=model.config.item_size)
@@ -105,3 +113,33 @@ def test_sl_dros_seqrec_trainer_normalization_branch(tmp_path: Path) -> None:
 
     loss = trainer.compute_rec_loss(inputs, outputs, norm_embeddings=True)
     assert torch.isfinite(loss).item()
+
+
+def test_sl_dros_seqrec_trainer_stepwise_negative_sampling_branch(tmp_path: Path) -> None:
+    torch.manual_seed(0)
+    args = build_training_args(
+        tmp_path,
+        args_cls=SLDROSSeqRecTrainingArguments,
+        sl_temperature=0.3,
+        dros_weight=0.1,
+        stepwise_negative_sampling=True,
+        norm_embeddings=True,
+    )
+    model = DummySeqRecModel(SeqRecModelConfig(item_size=22, hidden_size=4))
+    dataset = DummySeqRecDataset(seq_len=2, num_negatives=2, item_size=model.config.item_size)
+    trainer = SLDROSSeqRecTrainer(
+        model=model,
+        args=args,
+        data_collator=DummySeqRecCollator(),
+        train_dataset=dataset,
+        eval_dataset=dataset,
+    )
+
+    batch = [dataset[0], dataset[1]]
+    inputs = trainer.data_collator(batch)
+    outputs = model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"])
+
+    loss = trainer.compute_rec_loss(inputs, outputs)
+    loss_norm = trainer.compute_rec_loss(inputs, outputs, norm_embeddings=True)
+    assert torch.isfinite(loss).item()
+    assert torch.isfinite(loss_norm).item()

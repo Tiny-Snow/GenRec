@@ -72,3 +72,31 @@ def test_sl_logdet_seqrec_trainer_normalization_branch(tmp_path: Path) -> None:
 
     loss = trainer.compute_rec_loss(inputs, outputs, norm_embeddings=True)
     assert torch.isfinite(loss).item()
+
+
+def test_sl_logdet_seqrec_trainer_sequence_wise_negatives(tmp_path: Path) -> None:
+    args = build_training_args(
+        tmp_path,
+        args_cls=SLLogDetSeqRecTrainingArguments,
+        sl_temperature=0.35,
+        logdet_user_weight=0.2,
+        logdet_item_weight=0.3,
+        stepwise_negative_sampling=False,
+    )
+    model = DummySeqRecModel(SeqRecModelConfig(item_size=20, hidden_size=4))
+    dataset = DummySeqRecDataset(seq_len=2, num_negatives=2, item_size=model.config.item_size)
+    trainer = SLLogDetSeqRecTrainer(
+        model=model,
+        args=args,
+        data_collator=DummySeqRecCollator(),
+        train_dataset=dataset,
+        eval_dataset=dataset,
+    )
+
+    batch = [dataset[0], dataset[1]]
+    inputs = trainer.data_collator(batch)
+    outputs = model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"])
+
+    loss = trainer.compute_rec_loss(inputs, outputs)
+
+    assert torch.isfinite(loss).item()

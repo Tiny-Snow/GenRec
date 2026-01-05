@@ -15,7 +15,12 @@ from tests.trainers.trainer_seqrec.helpers import (
 )
 
 
-def _build_trainer(tmp_path: Path, item_size: int = 16) -> SLR2RecSeqRecTrainer:
+def _build_trainer(
+    tmp_path: Path,
+    item_size: int = 16,
+    *,
+    stepwise_negative_sampling: bool = False,
+) -> SLR2RecSeqRecTrainer:
     args = build_training_args(
         tmp_path,
         args_cls=SLR2RecSeqRecTrainingArguments,
@@ -24,6 +29,7 @@ def _build_trainer(tmp_path: Path, item_size: int = 16) -> SLR2RecSeqRecTrainer:
         r2rec_tau=1.0,
         r2rec_alpha_b=2.0,
         r2rec_alpha_p=0.0,
+        stepwise_negative_sampling=stepwise_negative_sampling,
     )
     model = DummySeqRecModel(SeqRecModelConfig(item_size=item_size, hidden_size=4))
     dataset = DummySeqRecDataset(seq_len=2, num_negatives=2, item_size=item_size)
@@ -80,8 +86,8 @@ def test_sl_r2rec_compute_rec_loss_applies_gamma(tmp_path: Path) -> None:
     mask = attention_mask.flatten().bool()
     positive_scores_flat = positive_scores.flatten()[mask]
     negative_scores_flat = negative_scores.reshape(-1, negative_scores.size(-1))[mask]
-    diff_scores = negative_scores_flat - positive_scores_flat.unsqueeze(-1)
-    sl_losses = torch.logsumexp(diff_scores / trainer.args.sl_temperature, dim=-1) * trainer.args.sl_temperature
+    all_scores = torch.cat([positive_scores_flat.unsqueeze(-1), negative_scores_flat], dim=-1)
+    sl_losses = -F.log_softmax(all_scores / trainer.args.sl_temperature, dim=-1)[:, 0]
 
     positive_items_flat = labels.flatten()[mask]
     gamma = trainer._compute_gamma_weights(positive_items_flat)
@@ -121,10 +127,44 @@ def test_sl_r2rec_compute_rec_loss_normalizes_when_requested(tmp_path: Path) -> 
     mask = attention_mask.flatten().bool()
     positive_scores_flat = positive_scores.flatten()[mask]
     negative_scores_flat = negative_scores.reshape(-1, negative_scores.size(-1))[mask]
-    diff_scores = negative_scores_flat - positive_scores_flat.unsqueeze(-1)
-    sl_losses = torch.logsumexp(diff_scores / trainer.args.sl_temperature, dim=-1) * trainer.args.sl_temperature
+    all_scores = torch.cat([positive_scores_flat.unsqueeze(-1), negative_scores_flat], dim=-1)
+    sl_losses = -F.log_softmax(all_scores / trainer.args.sl_temperature, dim=-1)[:, 0]
 
     gamma = trainer._compute_gamma_weights(labels.flatten()[mask])
     expected_loss = (sl_losses * gamma).mean()
 
     torch.testing.assert_close(loss, expected_loss)
+
+
+def test_sl_r2rec_stepwise_negative_sampling_branch(tmp_path: Path) -> None:
+    torch.manual_seed(0)
+    args = build_training_args(
+        tmp_path,
+        args_cls=SLR2RecSeqRecTrainingArguments,
+        sl_temperature=0.3,
+        tail_item_ratio=0.5,
+        r2rec_tau=0.8,
+        r2rec_alpha_b=1.5,
+        r2rec_alpha_p=0.0,
+        stepwise_negative_sampling=True,
+        norm_embeddings=True,
+    )
+    model = DummySeqRecModel(SeqRecModelConfig(item_size=18, hidden_size=4))
+    dataset = DummySeqRecDataset(seq_len=2, num_negatives=2, item_size=18)
+    trainer = SLR2RecSeqRecTrainer(
+        model=model,
+        args=args,
+        data_collator=DummySeqRecCollator(),
+        train_dataset=dataset,
+        eval_dataset=dataset,
+    )
+
+    batch = [dataset[0], dataset[1]]
+    inputs = trainer.data_collator(batch)
+    outputs = model(input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"])
+
+    loss = trainer.compute_rec_loss(inputs, outputs)
+    loss_norm = trainer.compute_rec_loss(inputs, outputs, norm_embeddings=True)
+
+    assert torch.isfinite(loss).item()
+    assert torch.isfinite(loss_norm).item()

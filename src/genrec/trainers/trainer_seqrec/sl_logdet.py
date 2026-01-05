@@ -31,6 +31,17 @@ class SLLogDetSeqRecTrainingArguments(SeqRecTrainingArguments):
         metadata={"help": "Temperature parameter for Softmax Loss. Default is 0.05."},
     )
 
+    stepwise_negative_sampling: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use step-wise negative sampling for SL. If False, item negatives are shared across "
+                "all time steps in a sequence. If True, negative samples are resampled for each time step, "
+                "while the number of negative samples at each step remains the same. Default is True."
+            )
+        },
+    )
+
     logdet_user_weight: float = field(
         default=0.0,
         metadata={"help": "Weight for the LogDet loss of user embeddings. Default is 0.0."},
@@ -100,8 +111,29 @@ class SLLogDetSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLLogDetSeqRecTrainingAr
         user_emb: Float[torch.Tensor, "B L d"] = outputs.last_hidden_state
         if norm_embeddings:
             user_emb = F.normalize(user_emb, p=2, dim=-1)
+
         positive_scores: Float[torch.Tensor, "B L"] = torch.sum(user_emb * positive_emb, dim=-1)
-        negative_scores: Float[torch.Tensor, "B L N"] = torch.matmul(user_emb, negative_emb.transpose(-1, -2))
+
+        negative_scores: Float[torch.Tensor, "B L N"]
+        if self.args.stepwise_negative_sampling:  # resample negatives for each timestep
+            B, L = positive_items.size()
+            stepwise_negative_items: Int[torch.Tensor, "B L N"]
+            stepwise_negative_items = torch.randint(
+                low=1,
+                high=self.item_size + 1,
+                size=(B, L, negative_items.size(-1)),
+                device=negative_items.device,
+            )  # NOTE: no guarantee of uniqueness or disjoint with positive items
+            stepwise_negative_emb: Float[torch.Tensor, "B L N d"] = self.model.embed_tokens(stepwise_negative_items)
+            if norm_embeddings:
+                stepwise_negative_emb = F.normalize(stepwise_negative_emb, p=2, dim=-1)
+            negative_scores: Float[torch.Tensor, "B L N"]
+            negative_scores = torch.sum(user_emb.unsqueeze(-2) * stepwise_negative_emb, dim=-1)
+            # mask out positive items in negatives by assigning a very small score
+            mask_pos_in_neg: Bool[torch.Tensor, "B L N"] = stepwise_negative_items == positive_items.unsqueeze(-1)
+            negative_scores = negative_scores.masked_fill(mask_pos_in_neg, -5e4)
+        else:  # share negatives across all timesteps (i.e., sequence-wise negatives)
+            negative_scores: Float[torch.Tensor, "B L N"] = torch.matmul(user_emb, negative_emb.transpose(-1, -2))
 
         # flatten scores and mask out padding positions
         attention_mask_flat: Bool[torch.Tensor, "B*L"]
@@ -114,9 +146,11 @@ class SLLogDetSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLLogDetSeqRecTrainingAr
         negative_scores_flat = negative_scores.reshape(-1, negative_scores.size(-1))[attention_mask_flat]
 
         # calculate SL loss
-        diff_scores: Float[torch.Tensor, "M N"] = negative_scores_flat - positive_scores_flat.unsqueeze(-1)
+        all_scores: Float[torch.Tensor, "M N+1"]
+        all_scores = torch.cat([positive_scores_flat.unsqueeze(-1), negative_scores_flat], dim=-1)
         tau = self.args.sl_temperature
-        sl_loss: Float[torch.Tensor, ""] = (torch.logsumexp(diff_scores / tau, dim=-1) * tau).mean()
+        pos_log_probs: Float[torch.Tensor, "M"] = F.log_softmax(all_scores / tau, dim=-1)[:, 0]
+        sl_loss: Float[torch.Tensor, ""] = -pos_log_probs.mean()
 
         # get average user embedding for each sequence in the batch
         # NOTE: average over all positions including padding leads to better stability

@@ -338,6 +338,8 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         # You may override this attribute if your label key is different in subclasses.
         self.label_names = ["labels"]
 
+        self.item_size = train_dataset.item_size
+
     def compute_loss(
         self,
         model: nn.Module,
