@@ -1,4 +1,4 @@
-"""BCE + D2LR Trainer for Sequential Recommendation Tasks."""
+"""Softmax Loss (SL) + ReSN Trainer for Sequential Recommendation Tasks."""
 
 from __future__ import annotations
 
@@ -9,45 +9,51 @@ from jaxtyping import Bool, Float, Int
 import torch
 import torch.nn.functional as F
 
-from ...datasets.dataset_seqrec import SeqRecDataset
 from ...models import SeqRecModel, SeqRecOutput
 from .base import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, SeqRecTrainingArgumentsFactory
 
 __all__ = [
-    "BCED2LRSeqRecTrainer",
-    "BCED2LRSeqRecTrainingArguments",
+    "SLReSNSeqRecTrainingArguments",
+    "SLReSNSeqRecTrainer",
 ]
 
 
 _SeqRecModel = TypeVar("_SeqRecModel", bound="SeqRecModel[Any, Any]")
 
 
-@SeqRecTrainingArgumentsFactory.register("bce_d2lr")
+@SeqRecTrainingArgumentsFactory.register("sl_resn")
 @dataclass
-class BCED2LRSeqRecTrainingArguments(SeqRecTrainingArguments):
-    """Training arguments for `BCED2LRSeqRecTrainer`."""
+class SLReSNSeqRecTrainingArguments(SeqRecTrainingArguments):
+    """Training arguments for `SLReSNSeqRecTrainer`."""
 
-    d2lr_ips_temperature: float = field(
-        default=0.1,
-        metadata={"help": "Temperature parameter for IPS weighting in D2LR. Default is 0.1."},
+    sl_temperature: float = field(
+        default=0.05,
+        metadata={"help": "Temperature parameter for Softmax Loss. Default is 0.05."},
+    )
+
+    resn_weight: float = field(
+        default=0.0001,
+        metadata={"help": "Weight for the ReSN loss component, i.e., β in the ReSN paper. Default is 0.0001."},
     )
 
 
-@SeqRecTrainerFactory.register("bce_d2lr")
-class BCED2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCED2LRSeqRecTrainingArguments]):
-    """D2LR Trainer for Sequential Recommendation Tasks.
+@SeqRecTrainerFactory.register("sl_resn")
+class SLReSNSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLReSNSeqRecTrainingArguments]):
+    """Softmax Loss (SL) + ReSN Trainer for Sequential Recommendation Tasks.
 
-    This trainer extends the base `SeqRecTrainer` to implement the D2LR loss function, a
-    IPS-based popularity debiasing method in generative recommendation. In sequential
-    recommendation, it is essentially equivalent to applying IPS weighting to the item-wise
-    loss, e.g., BCE loss. To stabilize training, we apply a temperature parameter to the IPS
-    weights.
+    This trainer extends the base `SeqRecTrainer` to implement the softmax loss function with the
+    ReSN regularization term, which is a SOTA spectral-norm-based popularity debiasing method in
+    collaborative filtering.
+
+    .. note::
+        Here, we adapt it for sequential recommendation tasks --- the average representation of
+        the model outputs in each step is treated as user embeddings.
 
     References:
-        - Dual Debiasing in LLM-based Recommendation. SIGIR '25.
+        - How Do Recommendation Models Amplify Popularity Bias? An Analysis from the Spectral Perspective. WSDM '25.
     """
 
-    args: BCED2LRSeqRecTrainingArguments
+    args: SLReSNSeqRecTrainingArguments
     model: _SeqRecModel
 
     def compute_rec_loss(
@@ -77,7 +83,7 @@ class BCED2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCED2LRSeqRecTrainingArgu
         if norm_embeddings:
             positive_emb = F.normalize(positive_emb, p=2, dim=-1)
 
-        assert inputs["negative_item_ids"] is not None, "Negative item IDs must be provided for BCE loss."
+        assert inputs["negative_item_ids"] is not None, "Negative item IDs must be provided for softmax loss."
         negative_items: Int[torch.Tensor, "B N"] = inputs["negative_item_ids"]
         negative_emb: Float[torch.Tensor, "B N d"] = self.model.embed_tokens(negative_items)
         if norm_embeddings:
@@ -100,30 +106,30 @@ class BCED2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCED2LRSeqRecTrainingArgu
         negative_scores_flat: Float[torch.Tensor, "M N"]
         negative_scores_flat = negative_scores.reshape(-1, negative_scores.size(-1))[attention_mask_flat]
 
-        # calculate BCE loss
-        positive_bce_loss: Float[torch.Tensor, "M"] = -F.logsigmoid(positive_scores_flat)
-        negative_bce_loss: Float[torch.Tensor, "M"] = -F.logsigmoid(-negative_scores_flat).mean(dim=-1)
+        # calculate SL loss
+        diff_scores: Float[torch.Tensor, "M N"] = negative_scores_flat - positive_scores_flat.unsqueeze(-1)
+        tau = self.args.sl_temperature
+        sl_loss: Float[torch.Tensor, ""] = (torch.logsumexp(diff_scores / tau, dim=-1) * tau).mean()
 
-        bce_loss: Float[torch.Tensor, "M"] = positive_bce_loss + negative_bce_loss
+        # get average user embedding for each sequence in the batch
+        # NOTE: average over all positions including padding leads to better stability
+        attention_mask: Bool[torch.Tensor, "B L"] = inputs["attention_mask"].bool()
+        user_emb_sum: Float[torch.Tensor, "B d"] = torch.sum(user_emb * attention_mask.unsqueeze(-1), dim=1)
+        user_emb_avg: Float[torch.Tensor, "B d"] = user_emb_sum / attention_mask.size(1)
 
-        # calculate IPS weights based on item popularity
-        self.train_dataset: SeqRecDataset
-        item_popularity: Float[torch.Tensor, "I+1"]
-        item_popularity = torch.as_tensor(
-            self.train_dataset.train_item_popularity,
-            device=positive_items.device,
-            dtype=torch.float32,
-        )
-        all_popularity = item_popularity[1:].sum()  # exclude padding item (index 0)
+        # compute ReSN regularization loss
+        item_emb: Float[torch.Tensor, "I d"] = self.model.item_embed_weight[1:]  # exclude padding item
+        if norm_embeddings:
+            item_emb = F.normalize(item_emb, p=2, dim=-1)
+        e: Float[torch.Tensor, "B 1"] = torch.ones(user_emb_avg.size(0), 1, device=user_emb_avg.device)
+        V_UT_e: Float[torch.Tensor, "1 I"] = e.T @ user_emb_avg @ item_emb.T
+        U_VT_V_UT_e: Float[torch.Tensor, "1 B"] = V_UT_e @ item_emb @ user_emb_avg.T
 
-        popularity_positive: Float[torch.Tensor, "M"]
-        popularity_positive = item_popularity[positive_items.flatten()[attention_mask_flat]]
-        popularity_positive = popularity_positive.clamp(min=1.0)
+        r_norm: Float[torch.Tensor, ""] = V_UT_e.reshape(-1).norm(p=2)
+        Yr_norm: Float[torch.Tensor, ""] = U_VT_V_UT_e.reshape(-1).norm(p=2)
+        resn_loss: Float[torch.Tensor, ""] = Yr_norm**2 / (r_norm**2 + 1e-8)
 
-        ips: Float[torch.Tensor, "M"]
-        ips = (all_popularity / popularity_positive).pow(self.args.d2lr_ips_temperature)
-        ips = ips / ips.mean()  # normalize to ensure gradient stability
-
-        loss: Float[torch.Tensor, ""] = (bce_loss * ips).mean()
+        # combine losses
+        loss: Float[torch.Tensor, ""] = sl_loss + self.args.resn_weight * resn_loss
 
         return loss

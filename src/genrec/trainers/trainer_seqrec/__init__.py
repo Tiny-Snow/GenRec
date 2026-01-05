@@ -59,3 +59,38 @@ __all__ += [
     "SLSeqRecTrainer",
     "SLSeqRecTrainingArguments",
 ]
+
+from .sl_d2lr import SLD2LRSeqRecTrainer, SLD2LRSeqRecTrainingArguments
+
+__all__ += [
+    "SLD2LRSeqRecTrainer",
+    "SLD2LRSeqRecTrainingArguments",
+]
+
+from .sl_dros import SLDROSSeqRecTrainer, SLDROSSeqRecTrainingArguments
+
+__all__ += [
+    "SLDROSSeqRecTrainer",
+    "SLDROSSeqRecTrainingArguments",
+]
+
+from .sl_logdet import SLLogDetSeqRecTrainer, SLLogDetSeqRecTrainingArguments
+
+__all__ += [
+    "SLLogDetSeqRecTrainer",
+    "SLLogDetSeqRecTrainingArguments",
+]
+
+from .sl_r2rec import SLR2RecSeqRecTrainer, SLR2RecSeqRecTrainingArguments
+
+__all__ += [
+    "SLR2RecSeqRecTrainer",
+    "SLR2RecSeqRecTrainingArguments",
+]
+
+from .sl_resn import SLReSNSeqRecTrainer, SLReSNSeqRecTrainingArguments
+
+__all__ += [
+    "SLReSNSeqRecTrainer",
+    "SLReSNSeqRecTrainingArguments",
+]

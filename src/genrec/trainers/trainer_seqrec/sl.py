@@ -73,7 +73,7 @@ class SLSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLSeqRecTrainingArguments]):
         if norm_embeddings:
             positive_emb = F.normalize(positive_emb, p=2, dim=-1)
 
-        assert inputs["negative_item_ids"] is not None, "Negative item IDs must be provided for BCE loss."
+        assert inputs["negative_item_ids"] is not None, "Negative item IDs must be provided for softmax loss."
         negative_items: Int[torch.Tensor, "B N"] = inputs["negative_item_ids"]
         negative_emb: Float[torch.Tensor, "B N d"] = self.model.embed_tokens(negative_items)
         if norm_embeddings:

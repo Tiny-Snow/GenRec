@@ -1,4 +1,4 @@
-"""BCE + D2LR Trainer for Sequential Recommendation Tasks."""
+"""Softmax Loss (SL) + D2LR Trainer for Sequential Recommendation Tasks."""
 
 from __future__ import annotations
 
@@ -14,18 +14,23 @@ from ...models import SeqRecModel, SeqRecOutput
 from .base import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, SeqRecTrainingArgumentsFactory
 
 __all__ = [
-    "BCED2LRSeqRecTrainer",
-    "BCED2LRSeqRecTrainingArguments",
+    "SLD2LRSeqRecTrainer",
+    "SLD2LRSeqRecTrainingArguments",
 ]
 
 
 _SeqRecModel = TypeVar("_SeqRecModel", bound="SeqRecModel[Any, Any]")
 
 
-@SeqRecTrainingArgumentsFactory.register("bce_d2lr")
+@SeqRecTrainingArgumentsFactory.register("sl_d2lr")
 @dataclass
-class BCED2LRSeqRecTrainingArguments(SeqRecTrainingArguments):
-    """Training arguments for `BCED2LRSeqRecTrainer`."""
+class SLD2LRSeqRecTrainingArguments(SeqRecTrainingArguments):
+    """Training arguments for `SLD2LRSeqRecTrainer`."""
+
+    sl_temperature: float = field(
+        default=0.05,
+        metadata={"help": "Temperature parameter for Softmax Loss. Default is 0.05."},
+    )
 
     d2lr_ips_temperature: float = field(
         default=0.1,
@@ -33,21 +38,20 @@ class BCED2LRSeqRecTrainingArguments(SeqRecTrainingArguments):
     )
 
 
-@SeqRecTrainerFactory.register("bce_d2lr")
-class BCED2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCED2LRSeqRecTrainingArguments]):
+@SeqRecTrainerFactory.register("sl_d2lr")
+class SLD2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLD2LRSeqRecTrainingArguments]):
     """D2LR Trainer for Sequential Recommendation Tasks.
 
-    This trainer extends the base `SeqRecTrainer` to implement the D2LR loss function, a
+    This trainer extends the base `SeqRecTrainer` to implement the D2LR loss function, an
     IPS-based popularity debiasing method in generative recommendation. In sequential
     recommendation, it is essentially equivalent to applying IPS weighting to the item-wise
-    loss, e.g., BCE loss. To stabilize training, we apply a temperature parameter to the IPS
-    weights.
+    Softmax Loss. To stabilize training, we apply a temperature parameter to the IPS weights.
 
     References:
         - Dual Debiasing in LLM-based Recommendation. SIGIR '25.
     """
 
-    args: BCED2LRSeqRecTrainingArguments
+    args: SLD2LRSeqRecTrainingArguments
     model: _SeqRecModel
 
     def compute_rec_loss(
@@ -77,7 +81,7 @@ class BCED2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCED2LRSeqRecTrainingArgu
         if norm_embeddings:
             positive_emb = F.normalize(positive_emb, p=2, dim=-1)
 
-        assert inputs["negative_item_ids"] is not None, "Negative item IDs must be provided for BCE loss."
+        assert inputs["negative_item_ids"] is not None, "Negative item IDs must be provided for softmax loss."
         negative_items: Int[torch.Tensor, "B N"] = inputs["negative_item_ids"]
         negative_emb: Float[torch.Tensor, "B N d"] = self.model.embed_tokens(negative_items)
         if norm_embeddings:
@@ -100,11 +104,10 @@ class BCED2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCED2LRSeqRecTrainingArgu
         negative_scores_flat: Float[torch.Tensor, "M N"]
         negative_scores_flat = negative_scores.reshape(-1, negative_scores.size(-1))[attention_mask_flat]
 
-        # calculate BCE loss
-        positive_bce_loss: Float[torch.Tensor, "M"] = -F.logsigmoid(positive_scores_flat)
-        negative_bce_loss: Float[torch.Tensor, "M"] = -F.logsigmoid(-negative_scores_flat).mean(dim=-1)
-
-        bce_loss: Float[torch.Tensor, "M"] = positive_bce_loss + negative_bce_loss
+        # calculate SL loss
+        diff_scores: Float[torch.Tensor, "M N"] = negative_scores_flat - positive_scores_flat.unsqueeze(-1)
+        tau = self.args.sl_temperature
+        sl_losses: Float[torch.Tensor, "M"] = torch.logsumexp(diff_scores / tau, dim=-1) * tau
 
         # calculate IPS weights based on item popularity
         self.train_dataset: SeqRecDataset
@@ -124,6 +127,6 @@ class BCED2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCED2LRSeqRecTrainingArgu
         ips = (all_popularity / popularity_positive).pow(self.args.d2lr_ips_temperature)
         ips = ips / ips.mean()  # normalize to ensure gradient stability
 
-        loss: Float[torch.Tensor, ""] = (bce_loss * ips).mean()
+        loss: Float[torch.Tensor, ""] = (sl_losses * ips).mean()
 
         return loss

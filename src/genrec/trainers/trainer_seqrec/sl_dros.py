@@ -1,4 +1,4 @@
-"""BCE + DROS Trainer for Sequential Recommendation Tasks."""
+"""Softmax Loss (SL) + DROS Trainer for Sequential Recommendation Tasks."""
 
 from __future__ import annotations
 
@@ -14,18 +14,23 @@ from ...models import SeqRecModel, SeqRecOutput
 from .base import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, SeqRecTrainingArgumentsFactory
 
 __all__ = [
-    "BCEDROSSeqRecTrainer",
-    "BCEDROSSeqRecTrainingArguments",
+    "SLDROSSeqRecTrainer",
+    "SLDROSSeqRecTrainingArguments",
 ]
 
 
 _SeqRecModel = TypeVar("_SeqRecModel", bound="SeqRecModel[Any, Any]")
 
 
-@SeqRecTrainingArgumentsFactory.register("bce_dros")
+@SeqRecTrainingArgumentsFactory.register("sl_dros")
 @dataclass
-class BCEDROSSeqRecTrainingArguments(SeqRecTrainingArguments):
-    """Training arguments for `BCEDROSSeqRecTrainer`."""
+class SLDROSSeqRecTrainingArguments(SeqRecTrainingArguments):
+    """Training arguments for `SLDROSSeqRecTrainer`."""
+
+    sl_temperature: float = field(
+        default=0.05,
+        metadata={"help": "Temperature parameter for Softmax Loss. Default is 0.05."},
+    )
 
     dros_temperature: float = field(
         default=0.5,
@@ -43,8 +48,8 @@ class BCEDROSSeqRecTrainingArguments(SeqRecTrainingArguments):
     )
 
 
-@SeqRecTrainerFactory.register("bce_dros")
-class BCEDROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCEDROSSeqRecTrainingArguments]):
+@SeqRecTrainerFactory.register("sl_dros")
+class SLDROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLDROSSeqRecTrainingArguments]):
     """DROS Trainer for Sequential Recommendation Tasks.
 
     This trainer extends the base `SeqRecTrainer` to implement the DROS loss function,
@@ -61,7 +66,7 @@ class BCEDROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCEDROSSeqRecTrainingArgu
         - A Generic Learning Framework for Sequential Recommendation with Distribution Shifts. SIGIR '23.
     """
 
-    args: BCEDROSSeqRecTrainingArguments
+    args: SLDROSSeqRecTrainingArguments
     model: _SeqRecModel
 
     def compute_rec_loss(
@@ -91,7 +96,7 @@ class BCEDROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCEDROSSeqRecTrainingArgu
         if norm_embeddings:
             positive_emb = F.normalize(positive_emb, p=2, dim=-1)
 
-        assert inputs["negative_item_ids"] is not None, "Negative item IDs must be provided for BCE loss."
+        assert inputs["negative_item_ids"] is not None, "Negative item IDs must be provided for softmax loss."
         negative_items: Int[torch.Tensor, "B N"] = inputs["negative_item_ids"]
         negative_emb: Float[torch.Tensor, "B N d"] = self.model.embed_tokens(negative_items)
         if norm_embeddings:
@@ -116,15 +121,14 @@ class BCEDROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCEDROSSeqRecTrainingArgu
         negative_scores_flat = negative_scores.reshape(-1, negative_scores.size(-1))[attention_mask]
         negative_probs: Float[torch.Tensor, "M N"] = torch.sigmoid(negative_scores_flat)
 
-        # calculate BCE loss with the same numerics as BCE trainer
-        bce_positive_loss: Float[torch.Tensor, ""] = -F.logsigmoid(positive_scores_flat).mean()
-        bce_negative_loss: Float[torch.Tensor, ""] = -F.logsigmoid(-negative_scores_flat).mean()
-
-        bce_loss = bce_positive_loss + bce_negative_loss
+        # calculate SL loss
+        diff_scores: Float[torch.Tensor, "M N"] = negative_scores_flat - positive_scores_flat.unsqueeze(-1)
+        tau = self.args.sl_temperature
+        sl_loss: Float[torch.Tensor, ""] = (torch.logsumexp(diff_scores / tau, dim=-1) * tau).mean()
 
         # calculate MSE loss
         mse_positive_losses: Float[torch.Tensor, "M"] = (1.0 - positive_probs) ** 2
-        mse_negative_losses: Float[torch.Tensor, "M N"] = (negative_probs) ** 2
+        mse_negative_losses: Float[torch.Tensor, "M N"] = negative_probs**2
 
         # apply popularity-based weights
         self.train_dataset: SeqRecDataset
@@ -150,6 +154,7 @@ class BCEDROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCEDROSSeqRecTrainingArgu
         weight_negative: Float[torch.Tensor, "M N"]
         weight_negative = (popularity_negative / all_popularity).pow(self.args.popularity_temperature)
 
+        # compute DRO loss components
         weighted_mse_positive: Float[torch.Tensor, "M"]
         weighted_mse_positive = torch.exp(mse_positive_losses / self.args.dros_temperature) * weight_positive
         dro_loss_positive: Float[torch.Tensor, ""] = weighted_mse_positive.sum() / weight_positive.sum()
@@ -162,6 +167,6 @@ class BCEDROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCEDROSSeqRecTrainingArgu
 
         dro_loss: Float[torch.Tensor, ""] = dro_loss_positive + dro_loss_negative
 
-        loss: Float[torch.Tensor, ""] = bce_loss + self.args.dros_weight * dro_loss
+        loss: Float[torch.Tensor, ""] = sl_loss + self.args.dros_weight * dro_loss
 
         return loss

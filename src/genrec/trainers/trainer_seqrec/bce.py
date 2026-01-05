@@ -95,6 +95,6 @@ class BCESeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCESeqRecTrainingArguments]):
         positive_loss: Float[torch.Tensor, ""] = -F.logsigmoid(positive_scores_flat).mean()
         negative_loss: Float[torch.Tensor, ""] = -F.logsigmoid(-negative_scores_flat).mean()
 
-        loss = positive_loss + negative_loss
+        loss: Float[torch.Tensor, ""] = positive_loss + negative_loss
 
         return loss

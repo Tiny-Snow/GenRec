@@ -1,4 +1,4 @@
-"""BCE + R2Rec Trainer for Sequential Recommendation Tasks."""
+"""Softmax Loss (SL) + R2Rec Trainer for Sequential Recommendation Tasks."""
 
 from __future__ import annotations
 
@@ -15,18 +15,23 @@ from ...models import SeqRecModel, SeqRecOutput
 from .base import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, SeqRecTrainingArgumentsFactory
 
 __all__ = [
-    "BCER2RecSeqRecTrainingArguments",
-    "BCER2RecSeqRecTrainer",
+    "SLR2RecSeqRecTrainingArguments",
+    "SLR2RecSeqRecTrainer",
 ]
 
 
 _SeqRecModel = TypeVar("_SeqRecModel", bound="SeqRecModel[Any, Any]")
 
 
-@SeqRecTrainingArgumentsFactory.register("bce_r2rec")
+@SeqRecTrainingArgumentsFactory.register("sl_r2rec")
 @dataclass
-class BCER2RecSeqRecTrainingArguments(SeqRecTrainingArguments):
-    """Training arguments for `BCER2RecSeqRecTrainer`."""
+class SLR2RecSeqRecTrainingArguments(SeqRecTrainingArguments):
+    """Training arguments for `SLR2RecSeqRecTrainer`."""
+
+    sl_temperature: float = field(
+        default=0.05,
+        metadata={"help": "Temperature parameter for Softmax Loss. Default is 0.05."},
+    )
 
     r2rec_alpha_b: float = field(
         default=1.0,
@@ -49,25 +54,25 @@ class BCER2RecSeqRecTrainingArguments(SeqRecTrainingArguments):
     )
 
 
-@SeqRecTrainerFactory.register("bce_r2rec")
-class BCER2RecSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCER2RecSeqRecTrainingArguments]):
+@SeqRecTrainerFactory.register("sl_r2rec")
+class SLR2RecSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLR2RecSeqRecTrainingArguments]):
     """R2Rec Trainer for Sequential Recommendation Tasks.
 
-    This trainer extends the base `SeqRecTrainer` to implement the R2Rec loss function, a
-    reweighting method designed to improve recommendation performance on tail items. To
-    stabilize training, a temperature parameter is applied to the reweighting factors.
+    This trainer extends the base `SeqRecTrainer` to implement the R2Rec reweighting method
+    while using Softmax Loss as the primary recommendation objective. To stabilize training, a
+    temperature parameter is applied to the reweighting factors.
 
     References:
-        - Reembedding and Reweighting are Needed for Tail Item Sequential Recommendation, WWW '25.
+        - Reembedding and Reweighting are Needed for Tail Item Sequential Recommendation. WWW '25.
     """
 
-    args: BCER2RecSeqRecTrainingArguments
+    args: SLR2RecSeqRecTrainingArguments
     model: _SeqRecModel
 
     def __init__(
         self,
         model: _SeqRecModel,
-        args: BCER2RecSeqRecTrainingArguments,
+        args: SLR2RecSeqRecTrainingArguments,
         data_collator: SeqRecCollator,
         train_dataset: SeqRecDataset,
         eval_dataset: Optional[SeqRecDataset] = None,
@@ -151,7 +156,7 @@ class BCER2RecSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCER2RecSeqRecTrainingAr
         if norm_embeddings:
             positive_emb = F.normalize(positive_emb, p=2, dim=-1)
 
-        assert inputs["negative_item_ids"] is not None, "Negative item IDs must be provided for BCE loss."
+        assert inputs["negative_item_ids"] is not None, "Negative item IDs must be provided for softmax loss."
         negative_items: Int[torch.Tensor, "B N"] = inputs["negative_item_ids"]
         negative_emb: Float[torch.Tensor, "B N d"] = self.model.embed_tokens(negative_items)
         if norm_embeddings:
@@ -174,16 +179,15 @@ class BCER2RecSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCER2RecSeqRecTrainingAr
         negative_scores_flat: Float[torch.Tensor, "M N"]
         negative_scores_flat = negative_scores.reshape(-1, negative_scores.size(-1))[attention_mask_flat]
 
-        # calculate BCE loss
-        positive_bce_loss: Float[torch.Tensor, "M"] = -F.logsigmoid(positive_scores_flat)
-        negative_bce_loss: Float[torch.Tensor, ""] = -F.logsigmoid(-negative_scores_flat).mean(dim=-1)
-
-        bce_loss: Float[torch.Tensor, "M"] = positive_bce_loss + negative_bce_loss
+        # calculate SL loss
+        diff_scores: Float[torch.Tensor, "M N"] = negative_scores_flat - positive_scores_flat.unsqueeze(-1)
+        tau = self.args.sl_temperature
+        sl_losses: Float[torch.Tensor, "M"] = torch.logsumexp(diff_scores / tau, dim=-1) * tau
 
         # reweight loss with R2Rec gamma weights
         positive_item_ids_flat = positive_items.flatten()[attention_mask_flat]
         gamma = self._compute_gamma_weights(positive_item_ids_flat)
 
-        loss: Float[torch.Tensor, ""] = (bce_loss * gamma).mean()
+        loss: Float[torch.Tensor, ""] = (sl_losses * gamma).mean()
 
         return loss
