@@ -85,6 +85,13 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
     - Changes the industrial implementation of relative position and time attention bias
         to a more readable `RelativeBucketedTimeAndPositionAttentionBias`.
 
+    .. note::
+        It suggests setting `linear_dropout` to 0.0 to stabilize training, as we observed
+        several gradient explosion issues when using non-zero linear dropout rates. Even
+        only the input embedding dropout is set to non-zero, the training could still
+        be unstable. However, `attention_dropout` can be set to a non-zero value without
+        causing instability.
+
     References:
         - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
             Generative Recommendations. ICML '24.

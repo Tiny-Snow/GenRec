@@ -144,10 +144,10 @@ class SequentialTransductionUnit(nn.Module):
         self.input_layernorm = RMSNorm(hidden_size)
         self.attn_output_layernorm = RMSNorm(hidden_size)
 
-        self.u_proj = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.v_proj = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.k_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.u_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
+        self.v_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
+        self.q_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
+        self.k_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
         self.o_proj = nn.Linear(hidden_size, hidden_size, bias=False)
 
         self.rel_attn_bias = RelativeBucketedTimeAndPositionAttentionBias(

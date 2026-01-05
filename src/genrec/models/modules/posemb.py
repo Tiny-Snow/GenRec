@@ -74,8 +74,12 @@ class RelativeBucketedTimeAndPositionAttentionBias(nn.Module):
     """Relative Bucketed Time and Position Attention Bias for attention mechanism.
 
     This module computes a bias matrix based on the relative time differences
-    and positional differences between elements in a sequence. The time differences
-    are bucketed into discrete intervals to capture temporal relationships effectively.
+    and positional differences between elements in a sequence. The relative time
+    differences are bucketed into discrete intervals to capture temporal relationships
+    effectively. Note that the relative time in (i, j) position is computed as
+    timestamp(j+1) - timestamp(i), following the official HSTU implementation. This
+    can better capture the time gap between the current item and the next item,
+    facilitating next-item prediction tasks.
 
     References:
         - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
@@ -126,13 +130,15 @@ class RelativeBucketedTimeAndPositionAttentionBias(nn.Module):
         rel_pos_ids_shifted: Int[torch.Tensor, "L L"] = rel_pos_ids + (self.max_seq_len - 1)
         rel_pos_bias: Float[torch.Tensor, "L L"] = self.pos_bias_table(rel_pos_ids_shifted).squeeze(-1)
 
-        # compute relative time differences
-        time_diffs: Int[torch.Tensor, "B L L"] = timestamps[:, :, None] - timestamps[:, None, :]
+        # compute relative time differences using ts(next) - ts(current) as in official HSTU
+        ext_timestamps = torch.cat([timestamps, timestamps[:, -1:].expand(-1, 1)], dim=1)
+        time_diffs: Int[torch.Tensor, "B L L"]
+        time_diffs = ext_timestamps[:, 1:].unsqueeze(2) - ext_timestamps[:, :-1].unsqueeze(1)
         bucketed_time_diffs: Int[torch.Tensor, "B L L"] = self.bucketization_fn(time_diffs)
-        bucketed_time_diffs = torch.clamp(bucketed_time_diffs, min=0, max=self.num_buckets)
+        bucketed_time_diffs = torch.clamp(bucketed_time_diffs, min=0, max=self.num_buckets).detach()
         rel_time_bias: Float[torch.Tensor, "B L L"] = self.time_bias_table(bucketed_time_diffs).squeeze(-1)
 
-        return (rel_pos_bias + rel_time_bias).unsqueeze(1)
+        return (rel_pos_bias.unsqueeze(0) + rel_time_bias).unsqueeze(1)
 
 
 class RotaryEmbedding(nn.Module):
