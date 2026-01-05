@@ -39,6 +39,13 @@ __all__ += [
     "BCELogDetSeqRecTrainingArguments",
 ]
 
+from .bce_r2rec import BCER2RecSeqRecTrainer, BCER2RecSeqRecTrainingArguments
+
+__all__ += [
+    "BCER2RecSeqRecTrainer",
+    "BCER2RecSeqRecTrainingArguments",
+]
+
 from .bce_resn import BCEReSNSeqRecTrainer, BCEReSNSeqRecTrainingArguments
 
 __all__ += [
