@@ -110,7 +110,8 @@ def test_relative_bucketed_bias_combines_time_and_position_components() -> None:
     rel_pos = pos_ids[None, :] - pos_ids[:, None] + (module.max_seq_len - 1)
     expected_pos = module.pos_bias_table.weight[rel_pos].squeeze(-1)
 
-    time_diffs = timestamps[:, :, None] - timestamps[:, None, :]
+    ext_timestamps = torch.cat([timestamps, timestamps[:, -1:].expand(-1, 1)], dim=1)
+    time_diffs = ext_timestamps[:, 1:].unsqueeze(2) - ext_timestamps[:, :-1].unsqueeze(1)
     bucketed = module.bucketization_fn(time_diffs)
     bucketed = torch.clamp(bucketed, min=0, max=module.num_buckets).long()
     expected_time = module.time_bias_table.weight[bucketed].squeeze(-1)
