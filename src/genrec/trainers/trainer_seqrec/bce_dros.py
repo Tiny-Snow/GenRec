@@ -58,7 +58,7 @@ class BCEDROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCEDROSSeqRecTrainingArgu
         incorrectly applied to the MSE loss, while they should be applied to the exponentiated
         MSE loss. We have fixed these issues in this implementation.
 
-    Reference:
+    References:
         - A Generic Learning Framework for Sequential Recommendation with Distribution Shifts. SIGIR '23.
     """
 

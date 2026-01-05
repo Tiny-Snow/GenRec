@@ -20,6 +20,14 @@ __all__ += [
     "SeqRecOutputFactory",
 ]
 
+from .hstu import HSTUModel, HSTUModelConfig, HSTUModelOutput
+
+__all__ += [
+    "HSTUModel",
+    "HSTUModelConfig",
+    "HSTUModelOutput",
+]
+
 from .sasrec import SASRecModel, SASRecModelConfig, SASRecModelOutput
 
 __all__ += [

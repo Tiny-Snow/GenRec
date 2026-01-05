@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Protocol, Sequence, Type, runtime_checkable
 
-import numpy as np
 from jaxtyping import Float
+import numpy as np
 from sentence_transformers import SentenceTransformer
 
 __all__ = [

@@ -39,7 +39,7 @@ class SLSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLSeqRecTrainingArguments]):
     This trainer extends the base `SeqRecTrainer` to implement the softmax loss function,
     which is commonly used in sequential recommendation tasks.
 
-    Reference:
+    References:
         - PSL: Rethinking and Improving Softmax Loss from Pairwise Perspective for Recommendation. NeurIPS '24.
     """
 

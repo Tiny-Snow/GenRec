@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
+from jaxtyping import Float
 import torch
 import torch.nn as nn
-from jaxtyping import Float
 
 from .posemb import apply_rotary_pos_emb
 

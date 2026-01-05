@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from jaxtyping import Float
 import torch
 import torch.nn as nn
-from jaxtyping import Float
 
 __all__ = [
     "SwiGLU",

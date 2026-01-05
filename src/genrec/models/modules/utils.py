@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-import torch
 from jaxtyping import Float, Int
+import torch
 
 __all__ = [
     "create_attention_mask",
@@ -32,7 +32,7 @@ def create_attention_mask(
 
     Returns:
         Float[torch.Tensor, "B 1 tgt_len seq_len"]: Attention mask tensor where masked positions
-            are set to `-inf` and unmasked positions are set to 0.
+            are set to `mask_value` (default to `-inf`) and unmasked positions are set to 0.
     """
     batch_size, seq_len = attention_mask.shape
     tgt_len = tgt_len if tgt_len is not None else seq_len

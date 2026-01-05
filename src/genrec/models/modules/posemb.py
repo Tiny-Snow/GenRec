@@ -2,16 +2,137 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional, Callable, Tuple
 
+from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-from jaxtyping import Float
+import torch.nn.functional as F
 
 __all__ = [
+    "LearnableInputPositionalEmbedding",
+    "RelativeBucketedTimeAndPositionAttentionBias",
     "RotaryEmbedding",
     "apply_rotary_pos_emb",
 ]
+
+
+class LearnableInputPositionalEmbedding(nn.Module):
+    """Learnable Input Positional Embedding module."""
+
+    def __init__(
+        self,
+        max_position_embeddings: int,
+        embed_dim: int,
+        dropout_rate: float = 0.0,
+    ) -> None:
+        """Initializes LearnableInputPositionalEmbedding module.
+
+        Args:
+            max_position_embeddings (int): Maximum number of position embeddings.
+            embed_dim (int): Dimensionality of the embeddings.
+            dropout_rate (float): Dropout rate applied to the output embeddings. Default is 0.0.
+        """
+        super().__init__()
+        self.pos_emb = nn.Embedding(max_position_embeddings, embed_dim)
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(
+        self,
+        x: Float[torch.Tensor, "B L d"],
+        position_ids: Optional[Float[torch.Tensor, "B L"]] = None,
+    ) -> Float[torch.Tensor, "B L d"]:
+        """Applies learnable positional embeddings to the input tensor.
+
+        Args:
+            x (Float[torch.Tensor, "B L d"]): Input tensor of shape (batch_size, seq_len, embed_dim).
+            position_ids (Optional[Float[torch.Tensor, "B L"]]): Optional position IDs used to index
+                positional embeddings. If omitted, positions are assumed sequential from zero.
+
+        Returns:
+            Float[torch.Tensor, "B L d"]: Input tensor augmented with positional embeddings.
+        """
+        batch_size, seq_len, _ = x.shape
+
+        # NOTE: by default, position_ids is created from right to left: [L-1, L-2, ..., 0].
+        # This is to align with the left padding scheme.
+        if position_ids is None:
+            position_ids = torch.arange(seq_len - 1, -1, -1, device=x.device).unsqueeze(0).expand(batch_size, -1)
+
+        pos_embeddings: Float[torch.Tensor, "B L d"]
+        pos_embeddings = self.pos_emb(position_ids)
+
+        # NOTE: here we do not scale the input embeddings by sqrt(d) before adding positional embeddings,
+        # as the model initialization in PreTrainedModel's `init_weights` already takes care of proper scaling.
+        x = x + pos_embeddings
+        x = self.dropout(x)
+
+        return x
+
+
+class RelativeBucketedTimeAndPositionAttentionBias(nn.Module):
+    """Relative Bucketed Time and Position Attention Bias for attention mechanism.
+
+    This module computes a bias matrix based on the relative time differences
+    and positional differences between elements in a sequence. The time differences
+    are bucketed into discrete intervals to capture temporal relationships effectively.
+
+    References:
+        - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
+            Generative Recommendations. ICML '24.
+    """
+
+    def __init__(
+        self,
+        max_seq_len: int,
+        num_buckets: int,
+        bucketization_fn: Callable[[Int[torch.Tensor, "..."]], Int[torch.Tensor, "..."]],
+    ) -> None:
+        """Initializes RelativeBucketedTimeAndPositionAttentionBias module.
+
+        Args:
+            max_seq_len (int): Maximum sequence length.
+            num_buckets (int): Number of buckets for time differences.
+            bucketization_fn (Callable[Int[torch.Tensor, "..."], Int[torch.Tensor, "..."]]):
+                Function to bucketize time differences.
+        """
+        super().__init__()
+        self.max_seq_len = max_seq_len
+        self.num_buckets = num_buckets
+        self.bucketization_fn = bucketization_fn
+
+        # NOTE: the attention bias is shared across all heads
+        self.time_bias_table = nn.Embedding(num_buckets + 1, 1)
+        self.pos_bias_table = nn.Embedding(2 * max_seq_len - 1, 1)
+
+    def forward(
+        self,
+        timestamps: Int[torch.Tensor, "B L"],
+    ) -> Float[torch.Tensor, "B 1 L L"]:
+        """Computes the relative bucketed time and position attention bias.
+
+        Args:
+            timestamps (Int[torch.Tensor, "B L"]): Timestamps of shape (batch_size, seq_len).
+
+        Returns:
+            Float[torch.Tensor, "B 1 L L"]: Attention bias tensor of shape (batch_size, 1, seq_len, seq_len).
+                Note that the second dimension is 1 since the bias is shared across all heads.
+        """
+        B, L = timestamps.shape
+
+        # compute relative positional differences
+        pos_ids: Int[torch.Tensor, "L"] = torch.arange(L, device=timestamps.device)
+        rel_pos_ids: Int[torch.Tensor, "L L"] = pos_ids[None, :] - pos_ids[:, None]
+        rel_pos_ids_shifted: Int[torch.Tensor, "L L"] = rel_pos_ids + (self.max_seq_len - 1)
+        rel_pos_bias: Float[torch.Tensor, "L L"] = self.pos_bias_table(rel_pos_ids_shifted).squeeze(-1)
+
+        # compute relative time differences
+        time_diffs: Int[torch.Tensor, "B L L"] = timestamps[:, :, None] - timestamps[:, None, :]
+        bucketed_time_diffs: Int[torch.Tensor, "B L L"] = self.bucketization_fn(time_diffs)
+        bucketed_time_diffs = torch.clamp(bucketed_time_diffs, min=0, max=self.num_buckets)
+        rel_time_bias: Float[torch.Tensor, "B L L"] = self.time_bias_table(bucketed_time_diffs).squeeze(-1)
+
+        return (rel_pos_bias + rel_time_bias).unsqueeze(1)
 
 
 class RotaryEmbedding(nn.Module):

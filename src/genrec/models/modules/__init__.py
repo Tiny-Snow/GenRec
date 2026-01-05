@@ -20,15 +20,23 @@ __all__ += [
     "RMSNorm",
 ]
 
-from .layers import LlamaDecoderLayer
+from .layers import LlamaDecoderLayer, SequentialTransductionUnit
 
 __all__ += [
     "LlamaDecoderLayer",
+    "SequentialTransductionUnit",
 ]
 
-from .posemb import RotaryEmbedding, apply_rotary_pos_emb
+from .posemb import (
+    LearnableInputPositionalEmbedding,
+    RelativeBucketedTimeAndPositionAttentionBias,
+    RotaryEmbedding,
+    apply_rotary_pos_emb,
+)
 
 __all__ += [
+    "LearnableInputPositionalEmbedding",
+    "RelativeBucketedTimeAndPositionAttentionBias",
     "RotaryEmbedding",
     "apply_rotary_pos_emb",
 ]

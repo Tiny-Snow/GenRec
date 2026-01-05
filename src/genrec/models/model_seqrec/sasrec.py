@@ -75,7 +75,7 @@ class SASRecModel(SeqRecModel[SASRecModelConfig, SASRecModelOutput]):
     The overall architecture follows the original SASRec design and utilizes the
     implementations in Llama model.
 
-    Reference:
+    References:
         - Self-Attentive Sequential Recommendation. ICDM '18.
     """
 

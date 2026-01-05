@@ -5,9 +5,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Callable, Tuple, Type
 
+from jaxtyping import Int
 import numba
 import numpy as np
-from jaxtyping import Int
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..base import RecDataset

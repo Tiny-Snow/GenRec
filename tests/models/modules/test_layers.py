@@ -1,6 +1,6 @@
 import torch
 
-from genrec.models.modules.layers import LlamaDecoderLayer
+from genrec.models.modules.layers import LlamaDecoderLayer, SequentialTransductionUnit
 from genrec.models.modules.posemb import RotaryEmbedding
 from genrec.models.modules.utils import create_attention_mask
 
@@ -29,6 +29,62 @@ def test_standard_decoder_layer_outputs_expected_shapes() -> None:
         hidden_states=hidden_states,
         attention_mask=causal_mask,
         position_embeddings=position_embeddings,
+    )
+
+    assert outputs.shape == (batch_size, seq_len, hidden_size)
+    assert attn_weights.shape == (batch_size, num_heads, seq_len, seq_len)
+
+
+def test_sequential_transduction_unit_respects_attention_mask() -> None:
+    hidden_size = 8
+    num_heads = 2
+    seq_len = 4
+    unit = SequentialTransductionUnit(
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        max_seq_len=seq_len,
+        num_buckets=4,
+        linear_dropout=0.0,
+        attention_dropout=0.0,
+    )
+
+    batch_size = 2
+    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+    attention_mask = torch.ones(batch_size, 1, seq_len, seq_len, dtype=torch.bool)
+    attention_mask[:, :, :, -1] = False
+    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+
+    outputs, attn_weights = unit(
+        hidden_states=hidden_states,
+        attention_mask=attention_mask,
+        timestamps=timestamps,
+    )
+
+    assert outputs.shape == (batch_size, seq_len, hidden_size)
+    assert attn_weights.shape == (batch_size, num_heads, seq_len, seq_len)
+    assert torch.all(attn_weights[..., -1] == 0)
+
+
+def test_sequential_transduction_unit_handles_missing_timestamps_and_mask() -> None:
+    hidden_size = 6
+    num_heads = 2
+    seq_len = 3
+    unit = SequentialTransductionUnit(
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        max_seq_len=seq_len,
+        num_buckets=2,
+        linear_dropout=0.0,
+        attention_dropout=0.0,
+    )
+
+    batch_size = 1
+    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+
+    outputs, attn_weights = unit(
+        hidden_states=hidden_states,
+        attention_mask=None,
+        timestamps=None,
     )
 
     assert outputs.shape == (batch_size, seq_len, hidden_size)
