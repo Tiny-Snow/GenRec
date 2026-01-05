@@ -1,4 +1,4 @@
-"""R2Rec Trainer for Sequential Recommendation Tasks (Reweighting only)."""
+"""BCE + R2Rec Trainer for Sequential Recommendation Tasks."""
 
 from __future__ import annotations
 
@@ -32,14 +32,17 @@ class BCER2RecSeqRecTrainingArguments(SeqRecTrainingArguments):
         default=1.0,
         metadata={"help": "Reward factor alpha_b for tail items."},
     )
+
     r2rec_alpha_p: float = field(
         default=0.0,
         metadata={"help": "Reward factor alpha_p for head items."},
     )
+
     r2rec_tau: float = field(
         default=0.5,
         metadata={"help": "Temperature parameter for R2Rec reweighting."},
     )
+
     tail_item_ratio: float = field(
         default=0.8,
         metadata={"help": "Percentage of items considered as tail."},
@@ -177,7 +180,7 @@ class BCER2RecSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCER2RecSeqRecTrainingAr
 
         bce_loss: Float[torch.Tensor, "M"] = positive_bce_loss + negative_bce_loss
 
-        # --- reweighting ---
+        # reweight loss with R2Rec gamma weights
         positive_item_ids_flat = positive_items.flatten()[attention_mask_flat]
         gamma = self._compute_gamma_weights(positive_item_ids_flat)
 
