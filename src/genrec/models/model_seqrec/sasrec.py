@@ -8,7 +8,6 @@ from typing import List, Tuple
 from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from ..modules import LlamaDecoderLayer, RMSNorm, RotaryEmbedding, create_attention_mask
 from .base import (
@@ -130,7 +129,7 @@ class SASRecModel(SeqRecModel[SASRecModelConfig, SASRecModelOutput]):
             **kwargs (Any): Additional keyword arguments for the model.
 
         Returns:
-            SASRecModelOutput: Model outputs packaged as a `SeqRecOutput` descendant.
+            SASRecModelOutput: Model outputs packaged as a `SASRecModelOutput` descendant.
         """
 
         hidden_states: Float[torch.Tensor, "B L d"]

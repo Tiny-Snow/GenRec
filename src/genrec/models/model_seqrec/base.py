@@ -10,7 +10,6 @@ from typing import Any, Callable, Generic, Optional, Tuple, Type, TypeVar, Union
 from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.utils.generic import ModelOutput
 

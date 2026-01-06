@@ -7,7 +7,6 @@ from typing import Optional, Callable, Tuple
 from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 __all__ = [
     "LearnableInputPositionalEmbedding",

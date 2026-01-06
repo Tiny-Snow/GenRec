@@ -1,29 +1,29 @@
-"""SeqRec Model: SASRec with Spring regularization."""
+"""SeqRec Model: HST with Spring regularization."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from jaxtyping import Bool, Float, Int
 import torch
 import torch.nn as nn
 
-from ..modules import LlamaDecoderLayer, RMSNorm, RotaryEmbedding, create_attention_mask
-from .base import SeqRecModel, SeqRecModelConfigFactory, SeqRecModelFactory, SeqRecOutputFactory
-from .sasrec import SASRecModelConfig, SASRecModelOutput
+from ..modules import LearnableInputPositionalEmbedding, RMSNorm, SequentialTransductionUnit, create_attention_mask
+from .base import SeqRecModel, SeqRecModelFactory, SeqRecModelConfigFactory, SeqRecOutputFactory
+from .hstu import HSTUModelConfig, HSTUModelOutput
 
 __all__ = [
-    "SASRecSpringModel",
-    "SASRecSpringModelConfig",
-    "SASRecSpringModelOutput",
+    "HSTUSpringModel",
+    "HSTUSpringModelConfig",
+    "HSTUSpringModelOutput",
 ]
 
 
-@SeqRecModelConfigFactory.register("sasrec_spring")
-class SASRecSpringModelConfig(SASRecModelConfig):
-    """Configuration class for SASRec model with Spring regularization, which
-    extends `SASRecModelConfig`."""
+@SeqRecModelConfigFactory.register("hstu_spring")
+class HSTUSpringModelConfig(HSTUModelConfig):
+    """Configuration class for HSTU model with Spring regularization, which
+    extends `HSTUModelConfig`."""
 
     def __init__(
         self,
@@ -39,15 +39,16 @@ class SASRecSpringModelConfig(SASRecModelConfig):
         Args:
             spring_attention_weight (float): Weight for the Spring regularization on
                 attention module. Default is 1.0.
-            spring_ffn_weight (float): Weight for the Spring regularization on feed-forward
-                network module. Default is 0.001.
             spring_emb_weight (float): Weight for the Spring regularization on item
                 embedding matrix. Default is 0.1.
+            spring_ffn_weight (float): Weight for the Spring regularization on feed-forward
+                network module. Note that this is only effective when `add_ffn` is True in
+                the base `HSTUModelConfig`. Default is 0.001.
             spring_attention_temperature (float): Temperature for the Spring regularization
                 on attention module. Default is 4.0.
             spectral_norm_iters (int): Number of power iteration steps for spectral norm
                 estimation. Default is 1.
-            **kwargs (Any): Additional keyword arguments for the base `SASRecModelConfig`.
+            **kwargs (Any): Additional keyword arguments for the base `HSTUModelConfig`.
         """
         super().__init__(**kwargs)
         self.spring_attention_weight = spring_attention_weight
@@ -57,58 +58,70 @@ class SASRecSpringModelConfig(SASRecModelConfig):
         self.spectral_norm_iters = spectral_norm_iters
 
 
-@SeqRecOutputFactory.register("sasrec_spring")
+@SeqRecOutputFactory.register("hstu_spring")
 @dataclass
-class SASRecSpringModelOutput(SASRecModelOutput):
-    """Output class for SASRec model with Spring regularization.
+class HSTUSpringModelOutput(HSTUModelOutput):
+    """Output class for HSTU model with Spring regularization.
 
-    The `SASRecSpringModelOutput` extends the `SASRecModelOutput`
-    without adding any additional attributes.
+    The `HSTUModelOutput` extends the `HSTUModelOutput` without adding any
+    additional attributes.
     """
 
     pass
 
 
 # TODO: add my own paper about Spring regularization.
-@SeqRecModelFactory.register("sasrec_spring")
-class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOutput]):
-    """SASRec model with Spring regularization.
+@SeqRecModelFactory.register("hstu_spring")
+class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput]):
+    """HSTU model with Spring regularization.
 
-    Here we reuse the `SASRecModel` network architecture and add Spring regularization
-    as the `model_loss` in the `SASRecSpringModelOutput`.
+    Here we reuse the `HSTUModel` network architecture and add Spring regularization
+    as the `model_loss` in the `HSTUSpringModelOutput`.
 
-    Reference:
-        - Self-Attentive Sequential Recommendation. ICDM '18.
+    References:
+        - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
+            Generative Recommendations. ICML '24.
         - ...
     """
 
-    config_class = SASRecSpringModelConfig
+    config_class = HSTUSpringModelConfig
 
-    def __init__(self, config: SASRecSpringModelConfig) -> None:
-        """Initializes SASRec model with the given configuration."""
+    def __init__(self, config: HSTUSpringModelConfig) -> None:
+        """Initializes HSTU model with the given configuration."""
         super().__init__(config)
-        self.config: SASRecSpringModelConfig
+        self.config: HSTUSpringModelConfig
 
         assert (
             config.hidden_size % config.num_attention_heads == 0
         ), "hidden_size must be divisible by num_attention_heads."
         self.head_dim = config.hidden_size // config.num_attention_heads
 
+        # NOTE: in HSTU, the dropout_rate of input embeddings and GLU are both set to linear_dropout.
+        self.input_pos_emb = LearnableInputPositionalEmbedding(
+            max_position_embeddings=config.max_seq_len,
+            embed_dim=config.hidden_size,
+            dropout_rate=config.linear_dropout,
+        )
+
         self.layers = nn.ModuleList(
             [
-                LlamaDecoderLayer(
+                SequentialTransductionUnit(
                     hidden_size=config.hidden_size,
                     num_heads=config.num_attention_heads,
-                    intermediate_size=config.hidden_size * 4,
+                    max_seq_len=config.max_seq_len,
+                    num_buckets=config.num_buckets,
+                    linear_dropout=config.linear_dropout,
                     attention_dropout=config.attention_dropout,
-                    attention_bias=config.attention_bias,
-                    ffn_bias=config.ffn_bias,
+                    add_ffn=config.add_ffn,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
         )
-        self.rotary_emb = RotaryEmbedding(head_dim=self.head_dim)
-        self.final_layer_norm = RMSNorm(config.hidden_size)
+
+        if config.final_layer_norm:
+            self.final_layer_norm = RMSNorm(config.hidden_size)
+        else:
+            self.final_layer_norm = nn.Identity()
 
         self.gradient_checkpointing = False  # disable gradient checkpointing by default
         self.post_init()  # use PretrainedModel's default weight initialization
@@ -121,8 +134,8 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         output_hidden_states: bool = False,
         output_attentions: bool = False,
         **kwargs,
-    ) -> SASRecSpringModelOutput:
-        """Forward pass for SASRec model with Spring regularization.
+    ) -> HSTUSpringModelOutput:
+        """Forward pass for HSTU model with Spring regularization.
 
         Args:
             input_ids (Int[torch.Tensor, "B L"]): Input item ID sequences of shape (batch_size, seq_len).
@@ -132,19 +145,26 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
             output_attentions (bool): Whether to return attention weights from all layers. Default is False.
             **kwargs (Any): Additional keyword arguments for the model.
 
+        Keywords Args:
+            timestamps (Int[torch.Tensor, "B L"]): Timestamps corresponding to each item in the input sequences.
+                The timestamps are assumed to be Unix format (in seconds).
+
         Returns:
-            SASRecSpringModelOutput: Model outputs packaged as a `SASRecSpringModelOutput` descendant.
+            HSTUSpringModelOutput: Model outputs packaged as a `HSTUSpringModelOutput` descendant.
         """
+
+        timestamps: Optional[Int[torch.Tensor, "B L"]] = kwargs.pop("timestamps", None)
+        if timestamps is None:  # pragma: no cover - defensive check
+            raise ValueError("HSTUModel.forward requires `timestamps` to be provided via kwargs.")
 
         hidden_states: Float[torch.Tensor, "B L d"]
         hidden_states = self.embed_tokens(input_ids)
 
-        causal_mask: Float[torch.Tensor, "B 1 L L"]
-        causal_mask = create_attention_mask(attention_mask, is_causal=True)
+        causal_mask: Bool[torch.Tensor, "B 1 L L"]
+        causal_mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
+        causal_mask = ~causal_mask  # True for valid positions, False for masked positions.
 
-        position_embeddings: Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]
-        position_embeddings = self.rotary_emb(hidden_states)
-
+        model_loss = None  # By default, HSTU does not compute model loss internally.
         all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
         all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
 
@@ -160,6 +180,8 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
             item_emb_sn = self._power_iteration(self.item_embed_weight, name="item_embed_weight")
             spring_loss_emb = item_emb_sn.log1p()
 
+        hidden_states = self.input_pos_emb(hidden_states)
+
         for layer_idx, layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states.append(hidden_states)
@@ -167,7 +189,7 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
             hidden_states, attn_weights = layer(
                 hidden_states,
                 attention_mask=causal_mask,
-                position_embeddings=position_embeddings,
+                timestamps=timestamps,
             )
 
             if output_attentions:
@@ -175,11 +197,11 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
 
             if output_model_loss:
                 # Spring regularization on o_proj
-                attn_Wo: Float[torch.Tensor, "d H*d_head"] = layer.self_attn.o_proj.weight
+                attn_Wo: Float[torch.Tensor, "d H*d_head"] = layer.o_proj.weight
                 attn_Wo_sn = self._power_iteration(attn_Wo, name=f"attn_{layer_idx}_wo")
 
                 # Spring regularization on v_proj and attn weights
-                attn_Wv: Float[torch.Tensor, "H d_head d"] = layer.self_attn.v_proj.weight.view(H, self.head_dim, d)
+                attn_Wv: Float[torch.Tensor, "H d_head d"] = layer.v_proj[0].weight.view(H, self.head_dim, d)
                 attn_Av_sn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
                 for head in range(H):
                     attn_Wv_h: Float[torch.Tensor, "d_head d"] = attn_Wv[head]
@@ -191,12 +213,14 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
                 # Spring regularization on attention module
                 spring_loss_attn = spring_loss_attn + (attn_Av_sn.sqrt() * attn_Wo_sn).log1p()
 
-                # Spring regularization on FFN modules
-                ffn_W1 = layer.mlp.up_proj.weight
-                ffn_W2 = layer.mlp.down_proj.weight
-                ffn_W1_sn = self._power_iteration(ffn_W1, name=f"ffn_{layer_idx}_w1")
-                ffn_W2_sn = self._power_iteration(ffn_W2, name=f"ffn_{layer_idx}_w2")
-                spring_loss_ffn = spring_loss_ffn + (ffn_W1_sn * ffn_W2_sn).log1p()
+                # Spring regularization on optional FFN module
+                if self.config.add_ffn:
+                    assert layer.mlp is not None, "FFN module must be present when add_ffn is True."
+                    ffn_W1 = layer.mlp.up_proj.weight
+                    ffn_W2 = layer.mlp.down_proj.weight
+                    ffn_W1_sn = self._power_iteration(ffn_W1, name=f"ffn_{layer_idx}_w1")
+                    ffn_W2_sn = self._power_iteration(ffn_W2, name=f"ffn_{layer_idx}_w2")
+                    spring_loss_ffn = spring_loss_ffn + (ffn_W1_sn * ffn_W2_sn).log1p()
 
         # normalize by number of layers
         spring_loss_attn = spring_loss_attn / self.config.num_hidden_layers
@@ -209,12 +233,15 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
             + self.config.spring_emb_weight * spring_loss_emb
         )
 
+        # NOTE: in the official HSTU code, there is no final layer norm,
+        # as it apply L2 normalization after getting the final item representations.
+        # Here we still keep an optional final layer norm for other loss functions' sake.
         hidden_states = self.final_layer_norm(hidden_states)
 
         if output_hidden_states:
             all_hidden_states.append(hidden_states)
 
-        return SASRecSpringModelOutput(
+        return HSTUSpringModelOutput(
             last_hidden_state=hidden_states,
             model_loss=model_loss if output_model_loss else None,
             hidden_states=tuple(all_hidden_states) if output_hidden_states else None,
@@ -288,9 +315,13 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         attention_mask: Int[torch.Tensor, "B L"],
     ) -> Float[torch.Tensor, ""]:
         """Estimates the spectral norm of the attention weight by its upper bound,
-        i.e., 1-norm of the attention weight. Here we flatten the batch and sequence
-        dimensions to one dimension, and estimate the 1-norm by log-sum-exp trick.
-        The padding positions are masked out by the `attention_mask`.
+        i.e., 1-norm * inf-norm of the attention weight. Here we flatten the batch
+        and sequence dimensions to one dimension, and estimate the 1/inf-norm by
+        log-sum-exp trick. The padding positions are masked out by the `attention_mask`.
+
+        .. note::
+            In HSTU, the key_sums (i.e., inf-norm) is not guaranteed to be 1, as the
+            attention is not normalized by softmax.
 
         Args:
             attn_weight (Float[torch.Tensor, "B L L"]): Attention weight tensor
@@ -307,10 +338,13 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         attn_weight = attn_weight.masked_fill(causal_mask.squeeze(1), 0.0)
 
         query_sums: Float[torch.Tensor, "B*L"] = attn_weight.sum(dim=-2).flatten()
+        key_sums: Float[torch.Tensor, "B*L"] = attn_weight.sum(dim=-1).flatten()
         attention_mask_flat: Bool[torch.Tensor, "B*L"] = attention_mask.bool().flatten()
         masked_query_sums: Float[torch.Tensor, "M"] = query_sums[attention_mask_flat]
+        masked_key_sums: Float[torch.Tensor, "M"] = key_sums[attention_mask_flat]
 
         tau = self.config.spring_attention_temperature
         norm_p1 = torch.logsumexp(masked_query_sums * tau, dim=0) / tau
+        norm_pinf = torch.logsumexp(masked_key_sums * tau, dim=0) / tau
 
-        return norm_p1
+        return norm_p1 * norm_pinf

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from jaxtyping import Bool, Float, Int
 import torch
@@ -37,6 +37,7 @@ class HSTUModelConfig(SeqRecModelConfig):
         linear_dropout: float = 0.0,
         attention_dropout: float = 0.0,
         final_layer_norm: bool = False,
+        add_ffn: bool = False,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
@@ -49,6 +50,8 @@ class HSTUModelConfig(SeqRecModelConfig):
             linear_dropout (float): Dropout rate for input embeddings and GLU. Default is 0.0.
             attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
             final_layer_norm (bool): Whether to apply a final layer normalization. Default is False.
+            add_ffn (bool): Whether to add feed-forward network after attention in each HSTU layer.
+                default is False.
             **kwargs (Any): Additional keyword arguments for the base `SeqRecModelConfig`.
         """
         super().__init__(**kwargs)
@@ -57,6 +60,7 @@ class HSTUModelConfig(SeqRecModelConfig):
         self.linear_dropout = linear_dropout
         self.attention_dropout = attention_dropout
         self.final_layer_norm = final_layer_norm
+        self.add_ffn = add_ffn
 
 
 @SeqRecOutputFactory.register("hstu")
@@ -84,6 +88,7 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
     - All the layer normalizations are implemented using `RMSNorm`.
     - Changes the industrial implementation of relative position and time attention bias
         to a more readable `RelativeBucketedTimeAndPositionAttentionBias`.
+    - Provide an option to add feed-forward network after attention in each HSTU layer.
 
     .. note::
         It suggests setting `linear_dropout` to 0.0 to stabilize training, as we observed
@@ -125,6 +130,7 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
                     num_buckets=config.num_buckets,
                     linear_dropout=config.linear_dropout,
                     attention_dropout=config.attention_dropout,
+                    add_ffn=config.add_ffn,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
@@ -162,11 +168,11 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
                 The timestamps are assumed to be Unix format (in seconds).
 
         Returns:
-            HSTUModelOutput: Model outputs packaged as a `SeqRecOutput` descendant.
+            HSTUModelOutput: Model outputs packaged as a `HSTUModelOutput` descendant.
         """
 
         timestamps: Optional[Int[torch.Tensor, "B L"]] = kwargs.pop("timestamps", None)
-        if timestamps is None:
+        if timestamps is None:  # pragma: no cover - defensive check
             raise ValueError("HSTUModel.forward requires `timestamps` to be provided via kwargs.")
 
         hidden_states: Float[torch.Tensor, "B L d"]

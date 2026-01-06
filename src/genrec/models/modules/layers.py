@@ -122,6 +122,7 @@ class SequentialTransductionUnit(nn.Module):
         num_buckets: int = 128,
         linear_dropout: float = 0.0,
         attention_dropout: float = 0.0,
+        add_ffn: bool = False,
     ) -> None:
         """Initializes SequentialTransductionUnit module.
 
@@ -129,8 +130,10 @@ class SequentialTransductionUnit(nn.Module):
             hidden_size (int): Dimensionality of the model's hidden representations.
             num_heads (int): Number of attention heads.
             max_seq_len (int): Maximum sequence length for relative position embeddings.
+            num_buckets (int): Number of buckets for relative position bucketization. Default is 128.
             linear_dropout (float): Dropout rate for linear layers. Default is 0.0.
             attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
+            add_ffn (bool): Whether to add feed-forward network after attention. Default is False.
         """
         super().__init__()
 
@@ -140,6 +143,7 @@ class SequentialTransductionUnit(nn.Module):
         self.num_heads = num_heads
         self.linear_dropout = linear_dropout
         self.attention_dropout = attention_dropout
+        self.add_ffn = add_ffn
 
         self.input_layernorm = RMSNorm(hidden_size)
         self.attn_output_layernorm = RMSNorm(hidden_size)
@@ -149,6 +153,16 @@ class SequentialTransductionUnit(nn.Module):
         self.q_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
         self.k_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
         self.o_proj = nn.Linear(hidden_size, hidden_size, bias=False)
+
+        self.mlp: Optional[SwiGLU] = None
+        self.post_attention_layernorm: Optional[RMSNorm] = None
+        if self.add_ffn:
+            self.mlp = SwiGLU(
+                hidden_size=hidden_size,
+                intermediate_size=4 * hidden_size,
+                ffn_bias=False,
+            )
+            self.post_attention_layernorm = RMSNorm(hidden_size)
 
         self.rel_attn_bias = RelativeBucketedTimeAndPositionAttentionBias(
             max_seq_len=max_seq_len,
@@ -203,4 +217,11 @@ class SequentialTransductionUnit(nn.Module):
         hidden_states = self.o_proj(hidden_states)
 
         hidden_states = residual + hidden_states
+
+        # Optional feed-forward network
+        if self.add_ffn and self.mlp is not None and self.post_attention_layernorm is not None:
+            residual = hidden_states
+            hidden_states = self.post_attention_layernorm(hidden_states)
+            hidden_states = residual + self.mlp(hidden_states)
+
         return hidden_states, qk_attn

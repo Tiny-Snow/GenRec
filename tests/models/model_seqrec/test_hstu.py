@@ -77,3 +77,35 @@ def test_hstu_returns_hidden_states_and_attentions() -> None:
             input_ids.size(1),
             input_ids.size(1),
         )
+
+
+def test_hstu_runs_optional_ffn_path() -> None:
+    config = HSTUModelConfig(
+        item_size=16,
+        hidden_size=8,
+        num_attention_heads=2,
+        num_hidden_layers=1,
+        max_seq_len=8,
+        add_ffn=True,
+    )
+    model = HSTUModel(config)
+
+    assert model.layers[0].mlp is not None
+
+    class RecordingMLP(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.called = False
+
+        def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+            self.called = True
+            return torch.zeros_like(hidden_states)
+
+    recording_mlp = RecordingMLP()
+    model.layers[0].mlp = recording_mlp
+
+    input_ids, attention_mask, timestamps = _dummy_inputs(config, batch_size=1, seq_len=4)
+    output = model(input_ids=input_ids, attention_mask=attention_mask, timestamps=timestamps)
+
+    assert recording_mlp.called
+    assert output.last_hidden_state.shape == (1, 4, config.hidden_size)
