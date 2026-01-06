@@ -1,4 +1,4 @@
-"""SeqRec Model: HST with Spring regularization."""
+"""SeqRec Model: HSTU with Spring regularization."""
 
 from __future__ import annotations
 
@@ -39,11 +39,11 @@ class HSTUSpringModelConfig(HSTUModelConfig):
         Args:
             spring_attention_weight (float): Weight for the Spring regularization on
                 attention module. Default is 1.0.
-            spring_emb_weight (float): Weight for the Spring regularization on item
-                embedding matrix. Default is 0.1.
             spring_ffn_weight (float): Weight for the Spring regularization on feed-forward
                 network module. Note that this is only effective when `add_ffn` is True in
                 the base `HSTUModelConfig`. Default is 0.001.
+            spring_emb_weight (float): Weight for the Spring regularization on item
+                embedding matrix. Default is 0.1.
             spring_attention_temperature (float): Temperature for the Spring regularization
                 on attention module. Default is 4.0.
             spectral_norm_iters (int): Number of power iteration steps for spectral norm
@@ -164,7 +164,6 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
         causal_mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
         causal_mask = ~causal_mask  # True for valid positions, False for masked positions.
 
-        model_loss = None  # By default, HSTU does not compute model loss internally.
         all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
         all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
 
