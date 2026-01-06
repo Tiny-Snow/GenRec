@@ -28,6 +28,14 @@ __all__ += [
     "HSTUModelOutput",
 ]
 
+from .hstu_spring import HSTUSpringModel, HSTUSpringModelConfig, HSTUSpringModelOutput
+
+__all__ += [
+    "HSTUSpringModel",
+    "HSTUSpringModelConfig",
+    "HSTUSpringModelOutput",
+]
+
 from .sasrec import SASRecModel, SASRecModelConfig, SASRecModelOutput
 
 __all__ += [
