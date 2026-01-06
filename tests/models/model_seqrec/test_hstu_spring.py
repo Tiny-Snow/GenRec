@@ -66,6 +66,64 @@ def test_hstu_spring_returns_weighted_model_loss(monkeypatch):
     torch.testing.assert_close(output.model_loss, expected_model_loss)
 
 
+def test_hstu_spring_normalizes_embeddings_before_spectral_norm(monkeypatch):
+    config = HSTUSpringModelConfig(
+        item_size=8,
+        hidden_size=4,
+        num_attention_heads=2,
+        num_hidden_layers=1,
+        norm_embeddings=True,
+        spring_attention_weight=0.0,
+        spring_ffn_weight=0.0,
+        spring_emb_weight=1.0,
+    )
+    model = HSTUSpringModel(config)
+
+    with torch.no_grad():
+        new_weight = torch.arange((config.item_size + 1) * config.hidden_size, dtype=torch.float32)
+        new_weight = new_weight.view(config.item_size + 1, config.hidden_size)
+        model._item_embed.weight.copy_(new_weight)
+
+    captured_weight: dict[str, torch.Tensor] = {}
+
+    def spy_power_iteration(self, W, name="", eps=1e-12):  # noqa: D401
+        value = torch.ones((), device=W.device, dtype=W.dtype)
+        if name == "item_embed_weight":
+            captured_weight["normalized"] = W.detach().clone()
+        return value
+
+    def fake_attention_weight_spectral_norm(self, attn_weight, attention_mask):  # noqa: D401
+        return torch.ones((), device=attn_weight.device, dtype=attn_weight.dtype)
+
+    monkeypatch.setattr(HSTUSpringModel, "_power_iteration", spy_power_iteration)
+    monkeypatch.setattr(
+        HSTUSpringModel,
+        "_attention_weight_spectral_norm",
+        fake_attention_weight_spectral_norm,
+    )
+
+    input_ids, attention_mask, timestamps = _dummy_inputs(config, batch_size=1, seq_len=3)
+    output = model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        timestamps=timestamps,
+        output_model_loss=True,
+    )
+
+    assert output.model_loss is not None
+    assert "normalized" in captured_weight
+
+    weight = captured_weight["normalized"]
+    row_norms = weight.norm(dim=-1)
+    nonzero_mask = row_norms > 0
+    torch.testing.assert_close(
+        row_norms[nonzero_mask],
+        torch.ones_like(row_norms[nonzero_mask]),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
 def test_hstu_spring_skips_model_loss_when_disabled():
     config = HSTUSpringModelConfig(
         item_size=16,

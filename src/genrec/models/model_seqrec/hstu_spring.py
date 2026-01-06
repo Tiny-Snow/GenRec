@@ -32,6 +32,7 @@ class HSTUSpringModelConfig(HSTUModelConfig):
         spring_emb_weight: float = 0.1,
         spring_attention_temperature: float = 4.0,
         spectral_norm_iters: int = 1,
+        norm_embeddings: bool = False,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
@@ -48,6 +49,8 @@ class HSTUSpringModelConfig(HSTUModelConfig):
                 on attention module. Default is 4.0.
             spectral_norm_iters (int): Number of power iteration steps for spectral norm
                 estimation. Default is 1.
+            norm_embeddings (bool): Whether to L2-normalize the item embeddings before
+                computing Spring regularization. Default is False.
             **kwargs (Any): Additional keyword arguments for the base `HSTUModelConfig`.
         """
         super().__init__(**kwargs)
@@ -56,6 +59,7 @@ class HSTUSpringModelConfig(HSTUModelConfig):
         self.spring_emb_weight = spring_emb_weight
         self.spring_attention_temperature = spring_attention_temperature
         self.spectral_norm_iters = spectral_norm_iters
+        self.norm_embeddings = norm_embeddings
 
 
 @SeqRecOutputFactory.register("hstu_spring")
@@ -176,7 +180,10 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
 
         # Spring regularization on item embeddings
         if output_model_loss:
-            item_emb_sn = self._power_iteration(self.item_embed_weight, name="item_embed_weight")
+            item_embed_weight = self.item_embed_weight
+            if self.config.norm_embeddings:
+                item_embed_weight = nn.functional.normalize(item_embed_weight, p=2, dim=-1)
+            item_emb_sn = self._power_iteration(item_embed_weight, name="item_embed_weight")
             spring_loss_emb = item_emb_sn.log1p()
 
         hidden_states = self.input_pos_emb(hidden_states)
