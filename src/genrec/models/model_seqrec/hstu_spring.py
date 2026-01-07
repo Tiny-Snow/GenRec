@@ -321,13 +321,15 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
         attention_mask: Int[torch.Tensor, "B L"],
     ) -> Float[torch.Tensor, ""]:
         """Estimates the spectral norm of the attention weight by its upper bound,
-        i.e., 1-norm * inf-norm of the attention weight. Here we flatten the batch
-        and sequence dimensions to one dimension, and estimate the 1/inf-norm by
-        log-sum-exp trick. The padding positions are masked out by the `attention_mask`.
+        i.e., 1-norm of the attention weight. Here we flatten the batch and sequence
+        dimensions to one dimension, and estimate the 1-norm by log-sum-exp trick.
+        The padding positions are masked out by the `attention_mask`.
 
         .. note::
-            In HSTU, the key_sums (i.e., inf-norm) is not guaranteed to be 1, as the
-            attention is not normalized by softmax.
+            Although the attention weights in HSTU are not row-stochastic, i.e., the
+            spectral norm is actually upper bounded by the square root of the product
+            of the 1-norm and infinity-norm, we only use the 1-norm here for better
+            computational efficiency and practical performance.
 
         Args:
             attn_weight (Float[torch.Tensor, "B L L"]): Attention weight tensor
@@ -344,13 +346,10 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
         attn_weight = attn_weight.masked_fill(causal_mask.squeeze(1), 0.0)
 
         query_sums: Float[torch.Tensor, "B*L"] = attn_weight.sum(dim=-2).flatten()
-        key_sums: Float[torch.Tensor, "B*L"] = attn_weight.sum(dim=-1).flatten()
         attention_mask_flat: Bool[torch.Tensor, "B*L"] = attention_mask.bool().flatten()
         masked_query_sums: Float[torch.Tensor, "M"] = query_sums[attention_mask_flat]
-        masked_key_sums: Float[torch.Tensor, "M"] = key_sums[attention_mask_flat]
 
         tau = self.config.spring_attention_temperature
         norm_p1 = torch.logsumexp(masked_query_sums * tau, dim=0) / tau
-        norm_pinf = torch.logsumexp(masked_key_sums * tau, dim=0) / tau
 
-        return norm_p1 * norm_pinf
+        return norm_p1

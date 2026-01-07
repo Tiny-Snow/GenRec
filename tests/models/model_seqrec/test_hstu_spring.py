@@ -221,11 +221,9 @@ def test_hstu_spring_attention_weight_spectral_norm_masks_padding():
     mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool().squeeze(1)
     masked_attn = attn_weight.masked_fill(mask, 0.0)
     query_sums = masked_attn.sum(dim=-2).flatten()
-    key_sums = masked_attn.sum(dim=-1).flatten()
     mask_flat = attention_mask.bool().flatten()
     masked_query = query_sums[mask_flat]
-    masked_key = key_sums[mask_flat]
-    expected = (torch.logsumexp(masked_query * tau, dim=0) / tau) * (torch.logsumexp(masked_key * tau, dim=0) / tau)
+    expected = torch.logsumexp(masked_query * tau, dim=0) / tau
 
     torch.testing.assert_close(result, expected)
 
