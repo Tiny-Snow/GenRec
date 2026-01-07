@@ -123,6 +123,7 @@ class SequentialTransductionUnit(nn.Module):
         linear_dropout: float = 0.0,
         attention_dropout: float = 0.0,
         add_ffn: bool = False,
+        softmax_attention: bool = False,
     ) -> None:
         """Initializes SequentialTransductionUnit module.
 
@@ -134,6 +135,8 @@ class SequentialTransductionUnit(nn.Module):
             linear_dropout (float): Dropout rate for linear layers. Default is 0.0.
             attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
             add_ffn (bool): Whether to add feed-forward network after attention. Default is False.
+            softmax_attention (bool): Whether to use softmax-based attention mechanism rather than
+                the original silu-based attention mechanism. Default is False.
         """
         super().__init__()
 
@@ -144,6 +147,7 @@ class SequentialTransductionUnit(nn.Module):
         self.linear_dropout = linear_dropout
         self.attention_dropout = attention_dropout
         self.add_ffn = add_ffn
+        self.softmax_attention = softmax_attention
 
         self.input_layernorm = RMSNorm(hidden_size)
         self.attn_output_layernorm = RMSNorm(hidden_size)
@@ -202,7 +206,10 @@ class SequentialTransductionUnit(nn.Module):
         qk_attn: Float[torch.Tensor, "B H L L"] = q @ k.transpose(-2, -1)
         if timestamps is not None:
             qk_attn = qk_attn + self.rel_attn_bias(timestamps)
-        qk_attn = F.silu(qk_attn) / L
+        if self.softmax_attention:
+            qk_attn = F.softmax(qk_attn / (hd**0.5), dim=-1, dtype=torch.float32).to(qk_attn.dtype)
+        else:
+            qk_attn = F.silu(qk_attn) / L
 
         if attention_mask is not None:
             qk_attn = qk_attn * attention_mask.to(qk_attn.dtype)

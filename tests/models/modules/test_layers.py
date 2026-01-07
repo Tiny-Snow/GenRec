@@ -89,3 +89,33 @@ def test_sequential_transduction_unit_handles_missing_timestamps_and_mask() -> N
 
     assert outputs.shape == (batch_size, seq_len, hidden_size)
     assert attn_weights.shape == (batch_size, num_heads, seq_len, seq_len)
+
+
+def test_sequential_transduction_unit_softmax_attention_normalizes_weights() -> None:
+    hidden_size = 8
+    num_heads = 2
+    seq_len = 3
+    unit = SequentialTransductionUnit(
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        max_seq_len=seq_len,
+        num_buckets=4,
+        linear_dropout=0.0,
+        attention_dropout=0.0,
+        softmax_attention=True,
+    )
+    unit.eval()
+
+    batch_size = 2
+    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+
+    _, attn_weights = unit(
+        hidden_states=hidden_states,
+        attention_mask=None,
+        timestamps=None,
+    )
+
+    assert attn_weights.shape == (batch_size, num_heads, seq_len, seq_len)
+    row_sums = attn_weights.sum(dim=-1)
+    assert torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-5)
+    assert torch.all(attn_weights >= 0)

@@ -38,6 +38,7 @@ class HSTUModelConfig(SeqRecModelConfig):
         attention_dropout: float = 0.0,
         final_layer_norm: bool = False,
         add_ffn: bool = False,
+        softmax_attention: bool = False,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
@@ -52,6 +53,8 @@ class HSTUModelConfig(SeqRecModelConfig):
             final_layer_norm (bool): Whether to apply a final layer normalization. Default is False.
             add_ffn (bool): Whether to add feed-forward network after attention in each HSTU layer.
                 default is False.
+            softmax_attention (bool): Whether to use softmax-based attention mechanism rather than
+                the original silu-based attention mechanism. Default is False.
             **kwargs (Any): Additional keyword arguments for the base `SeqRecModelConfig`.
         """
         super().__init__(**kwargs)
@@ -61,6 +64,7 @@ class HSTUModelConfig(SeqRecModelConfig):
         self.attention_dropout = attention_dropout
         self.final_layer_norm = final_layer_norm
         self.add_ffn = add_ffn
+        self.softmax_attention = softmax_attention
 
 
 @SeqRecOutputFactory.register("hstu")
@@ -89,6 +93,8 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
     - Changes the industrial implementation of relative position and time attention bias
         to a more readable `RelativeBucketedTimeAndPositionAttentionBias`.
     - Provide an option to add feed-forward network after attention in each HSTU layer.
+    - Provide an option to apply softmax-based attention rather than the original
+        silu-based attention mechanism, which may be more effective.
 
     .. note::
         It suggests setting `linear_dropout` to 0.0 to stabilize training, as we observed
@@ -131,6 +137,7 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
                     linear_dropout=config.linear_dropout,
                     attention_dropout=config.attention_dropout,
                     add_ffn=config.add_ffn,
+                    softmax_attention=config.softmax_attention,
                 )
                 for _ in range(config.num_hidden_layers)
             ]

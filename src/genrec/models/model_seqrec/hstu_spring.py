@@ -117,6 +117,7 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
                     linear_dropout=config.linear_dropout,
                     attention_dropout=config.attention_dropout,
                     add_ffn=config.add_ffn,
+                    softmax_attention=config.softmax_attention,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
