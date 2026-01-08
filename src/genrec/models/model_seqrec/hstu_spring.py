@@ -119,6 +119,7 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
                     add_ffn=config.add_ffn,
                     softmax_attention=config.softmax_attention,
                     attention_norm=config.attention_norm,
+                    time_interval=config.time_interval,
                 )
                 for _ in range(config.num_hidden_layers)
             ]

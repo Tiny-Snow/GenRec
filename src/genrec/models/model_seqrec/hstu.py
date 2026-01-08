@@ -40,6 +40,7 @@ class HSTUModelConfig(SeqRecModelConfig):
         add_ffn: bool = False,
         softmax_attention: bool = False,
         attention_norm: bool = False,
+        time_interval: float = 1.0,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
@@ -58,6 +59,8 @@ class HSTUModelConfig(SeqRecModelConfig):
                 the original silu-based attention mechanism. Default is False.
             attention_norm (bool): Whether to apply row-wise normalization to attention scores.
                 Default is False.
+            time_interval (float): Factor to divide Unix timestamps by before bucketization. Default is 1.0
+                (seconds). Use larger values (e.g., 86400) to operate on coarser units such as days.
             **kwargs (Any): Additional keyword arguments for the base `SeqRecModelConfig`.
         """
         super().__init__(**kwargs)
@@ -69,6 +72,7 @@ class HSTUModelConfig(SeqRecModelConfig):
         self.add_ffn = add_ffn
         self.softmax_attention = softmax_attention
         self.attention_norm = attention_norm
+        self.time_interval = time_interval
 
 
 @SeqRecOutputFactory.register("hstu")
@@ -144,6 +148,7 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
                     add_ffn=config.add_ffn,
                     softmax_attention=config.softmax_attention,
                     attention_norm=config.attention_norm,
+                    time_interval=config.time_interval,
                 )
                 for _ in range(config.num_hidden_layers)
             ]

@@ -125,6 +125,7 @@ class SequentialTransductionUnit(nn.Module):
         add_ffn: bool = False,
         softmax_attention: bool = False,
         attention_norm: bool = False,
+        time_interval: float = 1.0,
     ) -> None:
         """Initializes SequentialTransductionUnit module.
 
@@ -140,6 +141,8 @@ class SequentialTransductionUnit(nn.Module):
                 the original silu-based attention mechanism. Default is False.
             attention_norm (bool): Whether to apply row-wise normalization to attention scores.
                 Default is False.
+            time_interval (float): Factor to divide Unix timestamps by before bucketization. Default is 1.0
+                (seconds). Use larger values (e.g., 86400) to operate on coarser units such as days.
         """
         super().__init__()
 
@@ -152,6 +155,9 @@ class SequentialTransductionUnit(nn.Module):
         self.add_ffn = add_ffn
         self.softmax_attention = softmax_attention
         self.attention_norm = attention_norm
+        self.time_interval = float(time_interval)
+        if self.time_interval <= 0:
+            raise ValueError("time_interval must be positive.")
 
         self.input_layernorm = RMSNorm(hidden_size)
         self.attn_output_layernorm = RMSNorm(hidden_size)
@@ -209,7 +215,8 @@ class SequentialTransductionUnit(nn.Module):
 
         qk_attn: Float[torch.Tensor, "B H L L"] = q @ k.transpose(-2, -1)
         if timestamps is not None:
-            qk_attn = qk_attn + self.rel_attn_bias(timestamps)
+            scaled_timestamps = self._scale_timestamps(timestamps)
+            qk_attn = qk_attn + self.rel_attn_bias(scaled_timestamps)
         if self.softmax_attention:
             qk_attn = F.softmax(qk_attn / (hd**0.5), dim=-1, dtype=torch.float32).to(qk_attn.dtype)
         else:
@@ -239,3 +246,15 @@ class SequentialTransductionUnit(nn.Module):
             hidden_states = residual + self.mlp(hidden_states)
 
         return hidden_states, qk_attn
+
+    def _scale_timestamps(
+        self,
+        timestamps: Int[torch.Tensor, "B L"],
+    ) -> Int[torch.Tensor, "B L"]:
+        """Scales raw Unix timestamps by the configured time interval before bucketization."""
+        if self.time_interval == 1.0:
+            return timestamps
+
+        scaled: Float[torch.Tensor, "B L"]
+        scaled = torch.floor(timestamps.to(torch.float32) / self.time_interval)
+        return scaled.to(torch.long)
