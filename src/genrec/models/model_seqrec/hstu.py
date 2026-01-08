@@ -41,6 +41,7 @@ class HSTUModelConfig(SeqRecModelConfig):
         softmax_attention: bool = False,
         attention_norm: bool = False,
         time_interval: float = 1.0,
+        relative_position_bias: bool = True,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
@@ -61,6 +62,7 @@ class HSTUModelConfig(SeqRecModelConfig):
                 Default is False.
             time_interval (float): Factor to divide Unix timestamps by before bucketization. Default is 1.0
                 (seconds). Use larger values (e.g., 86400) to operate on coarser units such as days.
+            relative_position_bias (bool): Whether to use relative position bias. Default is True.
             **kwargs (Any): Additional keyword arguments for the base `SeqRecModelConfig`.
         """
         super().__init__(**kwargs)
@@ -73,6 +75,7 @@ class HSTUModelConfig(SeqRecModelConfig):
         self.softmax_attention = softmax_attention
         self.attention_norm = attention_norm
         self.time_interval = time_interval
+        self.relative_position_bias = relative_position_bias
 
 
 @SeqRecOutputFactory.register("hstu")
@@ -97,20 +100,18 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
     - The input positional embeddings are implemented using `LearnableInputPositionalEmbedding`,
         which directly adds learnable positional embeddings to the input embeddings
         without scaling with sqrt(hidden_size).
-    - All the layer normalizations are implemented using `RMSNorm`.
+    - All the layer normalizations are implemented using `RMSNorm`. We also provide an option
+        to apply a final layer normalization after the last HSTU layer.
     - Changes the industrial implementation of relative position and time attention bias
         to a more readable `RelativeBucketedTimeAndPositionAttentionBias`.
     - Provide an option to add feed-forward network after attention in each HSTU layer.
     - Provide an option to apply softmax-based attention rather than the original
         silu-based attention mechanism, as well as an option to apply row-wise normalization
         to attention scores before applying softmax, which may be more effective in some cases.
-
-    .. note::
-        It suggests setting `linear_dropout` to 0.0 to stabilize training, as we observed
-        several gradient explosion issues when using non-zero linear dropout rates. Even
-        only the input embedding dropout is set to non-zero, the training could still
-        be unstable. However, `attention_dropout` can be set to a non-zero value without
-        causing instability.
+    - Provide an option to enable/disable relative position bias. If enabled, the relative
+        position bias is added together with attention scores based on time intervals and
+        position differences. We also allow the user to adjust the granularity of time intervals
+        by setting the `time_interval` parameter in the model configuration.
 
     References:
         - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
@@ -149,6 +150,7 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
                     softmax_attention=config.softmax_attention,
                     attention_norm=config.attention_norm,
                     time_interval=config.time_interval,
+                    relative_position_bias=config.relative_position_bias,
                 )
                 for _ in range(config.num_hidden_layers)
             ]

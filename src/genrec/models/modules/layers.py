@@ -126,6 +126,7 @@ class SequentialTransductionUnit(nn.Module):
         softmax_attention: bool = False,
         attention_norm: bool = False,
         time_interval: float = 1.0,
+        relative_position_bias: bool = True,
     ) -> None:
         """Initializes SequentialTransductionUnit module.
 
@@ -143,6 +144,7 @@ class SequentialTransductionUnit(nn.Module):
                 Default is False.
             time_interval (float): Factor to divide Unix timestamps by before bucketization. Default is 1.0
                 (seconds). Use larger values (e.g., 86400) to operate on coarser units such as days.
+            relative_position_bias (bool): Whether to use relative position bias. Default is True.
         """
         super().__init__()
 
@@ -158,6 +160,7 @@ class SequentialTransductionUnit(nn.Module):
         self.time_interval = float(time_interval)
         if self.time_interval <= 0:
             raise ValueError("time_interval must be positive.")
+        self.relative_position_bias = relative_position_bias
 
         self.input_layernorm = RMSNorm(hidden_size)
         self.attn_output_layernorm = RMSNorm(hidden_size)
@@ -178,11 +181,13 @@ class SequentialTransductionUnit(nn.Module):
             )
             self.post_attention_layernorm = RMSNorm(hidden_size)
 
-        self.rel_attn_bias = RelativeBucketedTimeAndPositionAttentionBias(
-            max_seq_len=max_seq_len,
-            num_buckets=num_buckets,
-            bucketization_fn=lambda x: (torch.log(x.abs().clamp(min=1).float()) / 0.301).long(),
-        )  # log10(2) ≈ 0.301
+        self.rel_attn_bias: Optional[RelativeBucketedTimeAndPositionAttentionBias] = None
+        if self.relative_position_bias:
+            self.rel_attn_bias = RelativeBucketedTimeAndPositionAttentionBias(
+                max_seq_len=max_seq_len,
+                num_buckets=num_buckets,
+                bucketization_fn=lambda x: (torch.log(x.abs().clamp(min=1).float()) / 0.301).long(),
+            )  # log10(2) ≈ 0.301
 
     def forward(
         self,
@@ -214,7 +219,7 @@ class SequentialTransductionUnit(nn.Module):
         v: Float[torch.Tensor, "B H L head_dim"] = self.v_proj(hidden_states).view(B, L, H, hd).transpose(1, 2)
 
         qk_attn: Float[torch.Tensor, "B H L L"] = q @ k.transpose(-2, -1)
-        if timestamps is not None:
+        if timestamps is not None and self.rel_attn_bias is not None:
             scaled_timestamps = self._scale_timestamps(timestamps)
             qk_attn = qk_attn + self.rel_attn_bias(scaled_timestamps)
         if self.softmax_attention:

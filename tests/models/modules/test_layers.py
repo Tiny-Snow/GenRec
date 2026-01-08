@@ -1,3 +1,5 @@
+import copy
+
 import pytest
 import torch
 
@@ -150,6 +152,60 @@ def test_sequential_transduction_unit_attention_norm_normalizes_weights() -> Non
     assert attn_weights.shape == (batch_size, num_heads, seq_len, seq_len)
     row_sums = attn_weights.sum(dim=-1)
     assert torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-5)
+
+
+def test_sequential_transduction_unit_relative_position_bias_toggle_changes_outputs() -> None:
+    torch.manual_seed(0)
+    hidden_size = 8
+    num_heads = 2
+    seq_len = 4
+    batch_size = 2
+
+    unit_with_bias = SequentialTransductionUnit(
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        max_seq_len=seq_len,
+        num_buckets=4,
+        linear_dropout=0.0,
+        attention_dropout=0.0,
+        relative_position_bias=True,
+    )
+    unit_without_bias = SequentialTransductionUnit(
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        max_seq_len=seq_len,
+        num_buckets=4,
+        linear_dropout=0.0,
+        attention_dropout=0.0,
+        relative_position_bias=False,
+    )
+
+    state_dict = copy.deepcopy(unit_with_bias.state_dict())
+    unit_without_bias.load_state_dict(state_dict, strict=False)
+
+    unit_with_bias.eval()
+    unit_without_bias.eval()
+
+    if unit_with_bias.rel_attn_bias is not None:
+        unit_with_bias.rel_attn_bias.time_bias_table.weight.data.fill_(0.5)
+        unit_with_bias.rel_attn_bias.pos_bias_table.weight.data.fill_(0.1)
+
+    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+
+    out_with_bias, attn_with_bias = unit_with_bias(
+        hidden_states=hidden_states,
+        attention_mask=None,
+        timestamps=timestamps,
+    )
+    out_without_bias, attn_without_bias = unit_without_bias(
+        hidden_states=hidden_states,
+        attention_mask=None,
+        timestamps=timestamps,
+    )
+
+    assert not torch.allclose(out_with_bias, out_without_bias)
+    assert not torch.allclose(attn_with_bias, attn_without_bias)
 
 
 def test_sequential_transduction_unit_time_interval_matches_manual_scaling() -> None:
