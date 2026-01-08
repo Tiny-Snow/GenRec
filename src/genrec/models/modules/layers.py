@@ -124,6 +124,7 @@ class SequentialTransductionUnit(nn.Module):
         attention_dropout: float = 0.0,
         add_ffn: bool = False,
         softmax_attention: bool = False,
+        attention_norm: bool = False,
     ) -> None:
         """Initializes SequentialTransductionUnit module.
 
@@ -137,6 +138,8 @@ class SequentialTransductionUnit(nn.Module):
             add_ffn (bool): Whether to add feed-forward network after attention. Default is False.
             softmax_attention (bool): Whether to use softmax-based attention mechanism rather than
                 the original silu-based attention mechanism. Default is False.
+            attention_norm (bool): Whether to apply row-wise normalization to attention scores.
+                Default is False.
         """
         super().__init__()
 
@@ -148,6 +151,7 @@ class SequentialTransductionUnit(nn.Module):
         self.attention_dropout = attention_dropout
         self.add_ffn = add_ffn
         self.softmax_attention = softmax_attention
+        self.attention_norm = attention_norm
 
         self.input_layernorm = RMSNorm(hidden_size)
         self.attn_output_layernorm = RMSNorm(hidden_size)
@@ -210,6 +214,9 @@ class SequentialTransductionUnit(nn.Module):
             qk_attn = F.softmax(qk_attn / (hd**0.5), dim=-1, dtype=torch.float32).to(qk_attn.dtype)
         else:
             qk_attn = F.silu(qk_attn) / L
+
+        if self.attention_norm:
+            qk_attn = qk_attn / (qk_attn.sum(dim=-1, keepdim=True) + 1e-8)
 
         if attention_mask is not None:
             qk_attn = qk_attn * attention_mask.to(qk_attn.dtype)
