@@ -36,6 +36,7 @@ class SASRec2HSTUSpringModelConfig(SASRecModelConfig):
         max_seq_len: int = 512,
         learnable_input_pos_emb: bool = False,
         linear_dropout: float = 0.0,
+        attention_type: str = "softmax",
         spring_attention_weight: float = 1.0,
         spring_ffn_weight: float = 0.001,
         spring_emb_weight: float = 0.1,
@@ -52,6 +53,8 @@ class SASRec2HSTUSpringModelConfig(SASRecModelConfig):
                 for input sequences. Default is False.
             linear_dropout (float): Dropout rate for the learnable positional embeddings.
                 Default is 0.0.
+            attention_type (str): Type of attention normalization to use ("softmax", "silu", "silu_norm").
+                Default is "softmax".
             spring_attention_weight (float): Weight for the Spring regularization on
                 attention module. Default is 1.0.
             spring_ffn_weight (float): Weight for the Spring regularization on feed-forward
@@ -68,6 +71,7 @@ class SASRec2HSTUSpringModelConfig(SASRecModelConfig):
         self.max_seq_len = max_seq_len
         self.learnable_input_pos_emb = learnable_input_pos_emb
         self.linear_dropout = linear_dropout
+        self.attention_type = attention_type
         self.spring_attention_weight = spring_attention_weight
         self.spring_ffn_weight = spring_ffn_weight
         self.spring_emb_weight = spring_emb_weight
@@ -129,6 +133,7 @@ class SASRec2HSTUSpringModel(SeqRecModel[SASRec2HSTUSpringModelConfig, SASRec2HS
                     attention_dropout=config.attention_dropout,
                     attention_bias=config.attention_bias,
                     ffn_bias=config.ffn_bias,
+                    attention_type=config.attention_type,
                 )
                 for _ in range(config.num_hidden_layers)
             ]

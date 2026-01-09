@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .attention import MaskedSelfAttentionWithRoPE
+from .attention import MaskedSelfAttentionWithRoPE, MaskedSelfAttentionWithRoPEAndSiLUActivation
 from .feedforward import SwiGLU
 from .layernorm import RMSNorm
 from .posemb import RelativeBucketedTimeAndPositionAttentionBias
@@ -33,6 +33,7 @@ class LlamaDecoder2HSTULayer(nn.Module):
         attention_dropout: float = 0.0,
         attention_bias: bool = False,
         ffn_bias: bool = False,
+        attention_type: str = "softmax",
     ) -> None:
         """Initializes StandardDecoderLayer module.
 
@@ -43,6 +44,8 @@ class LlamaDecoder2HSTULayer(nn.Module):
             attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
             attention_bias (bool): Whether to include bias terms in the attention projections. Default is False.
             ffn_bias (bool): Whether to include bias terms in the feed-forward network projections. Default is False.
+            attention_type (str): Type of attention normalization to use ("softmax", "silu", "silu_norm").
+                Default is "softmax".
         """
         super().__init__()
 
@@ -54,14 +57,36 @@ class LlamaDecoder2HSTULayer(nn.Module):
         self.attention_dropout = attention_dropout
         self.attention_bias = attention_bias
         self.ffn_bias = ffn_bias
+        self.attention_type = attention_type
 
-        self.self_attn = MaskedSelfAttentionWithRoPE(
-            hidden_size=hidden_size,
-            head_dim=self.head_dim,
-            num_heads=num_heads,
-            attention_dropout=attention_dropout,
-            attention_bias=attention_bias,
-        )
+        if self.attention_type == "softmax":
+            self.self_attn = MaskedSelfAttentionWithRoPE(
+                hidden_size=hidden_size,
+                head_dim=self.head_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                attention_bias=attention_bias,
+            )
+        elif self.attention_type == "silu":
+            self.self_attn = MaskedSelfAttentionWithRoPEAndSiLUActivation(
+                hidden_size=hidden_size,
+                head_dim=self.head_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                attention_bias=attention_bias,
+                attention_norm=False,
+            )
+        elif self.attention_type == "silu_norm":
+            self.self_attn = MaskedSelfAttentionWithRoPEAndSiLUActivation(
+                hidden_size=hidden_size,
+                head_dim=self.head_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                attention_bias=attention_bias,
+                attention_norm=True,
+            )
+        else:
+            raise ValueError(f"Unsupported attention_type: {self.attention_type}")
         self.mlp = SwiGLU(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
