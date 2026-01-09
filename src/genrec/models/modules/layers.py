@@ -9,7 +9,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .attention import MaskedSelfAttentionWithRoPE, MaskedSelfAttentionWithRoPEAndSiLUActivation
+from .attention import (
+    GatedMaskedSelfAttentionWithRoPE,
+    GatedMaskedSelfAttentionWithRoPEAndSiLUActivation,
+    MaskedSelfAttentionWithRoPE,
+    MaskedSelfAttentionWithRoPEAndSiLUActivation,
+)
 from .feedforward import SwiGLU
 from .layernorm import RMSNorm
 from .posemb import RelativeBucketedTimeAndPositionAttentionBias
@@ -82,6 +87,34 @@ class LlamaDecoder2HSTULayer(nn.Module):
                 head_dim=self.head_dim,
                 num_heads=num_heads,
                 attention_dropout=attention_dropout,
+                attention_bias=attention_bias,
+                attention_norm=True,
+            )
+        elif self.attention_type == "gated_softmax":
+            self.self_attn = GatedMaskedSelfAttentionWithRoPE(
+                hidden_size=hidden_size,
+                head_dim=self.head_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                attention_bias=attention_bias,
+            )
+        elif self.attention_type == "gated_silu":
+            self.self_attn = GatedMaskedSelfAttentionWithRoPEAndSiLUActivation(
+                hidden_size=hidden_size,
+                head_dim=self.head_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                linear_dropout=0.0,
+                attention_bias=attention_bias,
+                attention_norm=False,
+            )
+        elif self.attention_type == "gated_silu_norm":
+            self.self_attn = GatedMaskedSelfAttentionWithRoPEAndSiLUActivation(
+                hidden_size=hidden_size,
+                head_dim=self.head_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                linear_dropout=0.0,
                 attention_bias=attention_bias,
                 attention_norm=True,
             )

@@ -2,9 +2,16 @@
 
 __all__ = []
 
-from .attention import MaskedSelfAttentionWithRoPE, MaskedSelfAttentionWithRoPEAndSiLUActivation
+from .attention import (
+    GatedMaskedSelfAttentionWithRoPE,
+    GatedMaskedSelfAttentionWithRoPEAndSiLUActivation,
+    MaskedSelfAttentionWithRoPE,
+    MaskedSelfAttentionWithRoPEAndSiLUActivation,
+)
 
 __all__ += [
+    "GatedMaskedSelfAttentionWithRoPE",
+    "GatedMaskedSelfAttentionWithRoPEAndSiLUActivation",
     "MaskedSelfAttentionWithRoPE",
     "MaskedSelfAttentionWithRoPEAndSiLUActivation",
 ]
