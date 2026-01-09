@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .attention import (
+    GatedMaskedSelfAttentionWithLearnableRelativePEAndSiLUActivation,
     GatedMaskedSelfAttentionWithRoPE,
     GatedMaskedSelfAttentionWithRoPEAndSiLUActivation,
     MaskedSelfAttentionWithRoPE,
@@ -117,6 +118,30 @@ class LlamaDecoder2HSTULayer(nn.Module):
                 linear_dropout=0.0,
                 attention_bias=attention_bias,
                 attention_norm=True,
+            )
+        elif self.attention_type == "silu_learnable_rel_pe":
+            self.self_attn = GatedMaskedSelfAttentionWithLearnableRelativePEAndSiLUActivation(
+                hidden_size=hidden_size,
+                head_dim=self.head_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                linear_dropout=0.0,
+                attention_bias=attention_bias,
+                attention_norm=False,
+                max_seq_len=512,
+                num_buckets=128,
+            )
+        elif self.attention_type == "silu_learnable_rel_pe_norm":
+            self.self_attn = GatedMaskedSelfAttentionWithLearnableRelativePEAndSiLUActivation(
+                hidden_size=hidden_size,
+                head_dim=self.head_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                linear_dropout=0.0,
+                attention_bias=attention_bias,
+                attention_norm=True,
+                max_seq_len=512,
+                num_buckets=128,
             )
         else:
             raise ValueError(f"Unsupported attention_type: {self.attention_type}")
