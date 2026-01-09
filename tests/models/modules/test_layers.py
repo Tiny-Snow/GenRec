@@ -267,3 +267,53 @@ def test_sequential_transduction_unit_rejects_non_positive_time_interval() -> No
             attention_dropout=0.0,
             time_interval=0.0,
         )
+
+
+def test_sequential_transduction_unit_attention_gating_toggle_changes_outputs() -> None:
+    torch.manual_seed(0)
+    hidden_size = 8
+    num_heads = 2
+    seq_len = 4
+    batch_size = 2
+
+    unit_gated = SequentialTransductionUnit(
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        max_seq_len=seq_len,
+        num_buckets=4,
+        linear_dropout=0.0,
+        attention_dropout=0.0,
+        attention_gating=True,
+    )
+    torch.manual_seed(0)
+    unit_no_gate = SequentialTransductionUnit(
+        hidden_size=hidden_size,
+        num_heads=num_heads,
+        max_seq_len=seq_len,
+        num_buckets=4,
+        linear_dropout=0.0,
+        attention_dropout=0.0,
+        attention_gating=False,
+    )
+
+    assert unit_gated.u_proj is not None
+    assert unit_gated.attn_output_layernorm is not None
+    assert unit_no_gate.u_proj is None
+    assert unit_no_gate.attn_output_layernorm is None
+
+    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+
+    out_gated, _ = unit_gated(
+        hidden_states=hidden_states,
+        attention_mask=None,
+        timestamps=timestamps,
+    )
+    out_no_gate, _ = unit_no_gate(
+        hidden_states=hidden_states,
+        attention_mask=None,
+        timestamps=timestamps,
+    )
+
+    assert out_gated.shape == out_no_gate.shape
+    assert not torch.allclose(out_gated, out_no_gate)

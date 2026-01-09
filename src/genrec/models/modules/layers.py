@@ -127,6 +127,7 @@ class SequentialTransductionUnit(nn.Module):
         attention_norm: bool = False,
         time_interval: float = 1.0,
         relative_position_bias: bool = True,
+        attention_gating: bool = True,
     ) -> None:
         """Initializes SequentialTransductionUnit module.
 
@@ -145,6 +146,7 @@ class SequentialTransductionUnit(nn.Module):
             time_interval (float): Factor to divide Unix timestamps by before bucketization. Default is 1.0
                 (seconds). Use larger values (e.g., 86400) to operate on coarser units such as days.
             relative_position_bias (bool): Whether to use relative position bias. Default is True.
+            attention_gating (bool): Whether to use attention gating mechanism. Default is True.
         """
         super().__init__()
 
@@ -161,11 +163,16 @@ class SequentialTransductionUnit(nn.Module):
         if self.time_interval <= 0:
             raise ValueError("time_interval must be positive.")
         self.relative_position_bias = relative_position_bias
+        self.attention_gating = attention_gating
 
         self.input_layernorm = RMSNorm(hidden_size)
-        self.attn_output_layernorm = RMSNorm(hidden_size)
+        self.attn_output_layernorm: Optional[RMSNorm] = None
+        if self.attention_gating:
+            self.attn_output_layernorm = RMSNorm(hidden_size)
 
-        self.u_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
+        self.u_proj: Optional[nn.Sequential] = None
+        if self.attention_gating:
+            self.u_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
         self.v_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
         self.q_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
         self.k_proj = nn.Sequential(nn.Linear(hidden_size, hidden_size, bias=False), nn.SiLU())
@@ -237,9 +244,10 @@ class SequentialTransductionUnit(nn.Module):
         attn_output: Float[torch.Tensor, "B L d"] = (qk_attn @ v).transpose(1, 2).contiguous().view(B, L, d)
 
         # HSTU GLU
-        u: Float[torch.Tensor, "B L d"] = self.u_proj(hidden_states)
-        hidden_states = u * self.attn_output_layernorm(attn_output)
-        hidden_states = F.dropout(hidden_states, p=self.linear_dropout, training=self.training)
+        if self.attention_gating and self.u_proj is not None and self.attn_output_layernorm is not None:
+            u: Float[torch.Tensor, "B L d"] = self.u_proj(hidden_states)
+            hidden_states = u * self.attn_output_layernorm(attn_output)
+            hidden_states = F.dropout(hidden_states, p=self.linear_dropout, training=self.training)
         hidden_states = self.o_proj(hidden_states)
 
         hidden_states = residual + hidden_states

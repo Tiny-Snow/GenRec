@@ -121,6 +121,7 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
                     attention_norm=config.attention_norm,
                     time_interval=config.time_interval,
                     relative_position_bias=config.relative_position_bias,
+                    attention_gating=config.attention_gating,
                 )
                 for _ in range(config.num_hidden_layers)
             ]

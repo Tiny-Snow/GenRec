@@ -109,3 +109,23 @@ def test_hstu_runs_optional_ffn_path() -> None:
 
     assert recording_mlp.called
     assert output.last_hidden_state.shape == (1, 4, config.hidden_size)
+
+
+def test_hstu_attention_gating_toggle_propagates() -> None:
+    config = HSTUModelConfig(
+        item_size=10,
+        hidden_size=6,
+        num_attention_heads=2,
+        num_hidden_layers=1,
+        attention_gating=False,
+    )
+    model = HSTUModel(config)
+
+    assert all(layer.attention_gating is False for layer in model.layers)
+    assert all(layer.u_proj is None for layer in model.layers)
+    assert all(layer.attn_output_layernorm is None for layer in model.layers)
+
+    input_ids, attention_mask, timestamps = _dummy_inputs(config, batch_size=1, seq_len=3)
+    output = model(input_ids=input_ids, attention_mask=attention_mask, timestamps=timestamps)
+
+    assert output.last_hidden_state.shape == (1, 3, config.hidden_size)

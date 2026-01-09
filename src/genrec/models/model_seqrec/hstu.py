@@ -42,6 +42,7 @@ class HSTUModelConfig(SeqRecModelConfig):
         attention_norm: bool = False,
         time_interval: float = 1.0,
         relative_position_bias: bool = True,
+        attention_gating: bool = True,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
@@ -63,6 +64,7 @@ class HSTUModelConfig(SeqRecModelConfig):
             time_interval (float): Factor to divide Unix timestamps by before bucketization. Default is 1.0
                 (seconds). Use larger values (e.g., 86400) to operate on coarser units such as days.
             relative_position_bias (bool): Whether to use relative position bias. Default is True.
+            attention_gating (bool): Whether to use attention gating mechanism. Default is True.
             **kwargs (Any): Additional keyword arguments for the base `SeqRecModelConfig`.
         """
         super().__init__(**kwargs)
@@ -76,6 +78,7 @@ class HSTUModelConfig(SeqRecModelConfig):
         self.attention_norm = attention_norm
         self.time_interval = time_interval
         self.relative_position_bias = relative_position_bias
+        self.attention_gating = attention_gating
 
 
 @SeqRecOutputFactory.register("hstu")
@@ -112,6 +115,7 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
         position bias is added together with attention scores based on time intervals and
         position differences. We also allow the user to adjust the granularity of time intervals
         by setting the `time_interval` parameter in the model configuration.
+    - Provide an option to enable/disable attention gating mechanism in HSTU.
 
     References:
         - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
@@ -151,6 +155,7 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
                     attention_norm=config.attention_norm,
                     time_interval=config.time_interval,
                     relative_position_bias=config.relative_position_bias,
+                    attention_gating=config.attention_gating,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
