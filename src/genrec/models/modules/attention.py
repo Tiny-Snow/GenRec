@@ -198,7 +198,7 @@ class MaskedSelfAttentionWithRoPEAndSiLUActivation(nn.Module):
         if attention_mask is not None:
             attn_weights = attn_weights + attention_mask  # -inf -> 0 after addition
 
-        attn_weights = F.silu(attn_weights)
+        attn_weights = F.silu(attn_weights) / seq_len
         if self.attention_norm:
             attn_weights = attn_weights / (attn_weights.sum(dim=-1, keepdim=True) + 1e-8)
 
