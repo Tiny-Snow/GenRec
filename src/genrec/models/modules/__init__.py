@@ -20,10 +20,11 @@ __all__ += [
     "RMSNorm",
 ]
 
-from .layers import LlamaDecoderLayer, SequentialTransductionUnit
+from .layers import LlamaDecoderLayer, LlamaDecoder2HSTULayer, SequentialTransductionUnit
 
 __all__ += [
     "LlamaDecoderLayer",
+    "LlamaDecoder2HSTULayer",
     "SequentialTransductionUnit",
 ]
 

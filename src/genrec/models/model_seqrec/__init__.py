@@ -51,3 +51,11 @@ __all__ += [
     "SASRecSpringModelConfig",
     "SASRecSpringModelOutput",
 ]
+
+from .sasrec2hstu_spring import SASRec2HSTUSpringModel, SASRec2HSTUSpringModelConfig, SASRec2HSTUSpringModelOutput
+
+__all__ += [
+    "SASRec2HSTUSpringModel",
+    "SASRec2HSTUSpringModelConfig",
+    "SASRec2HSTUSpringModelOutput",
+]
