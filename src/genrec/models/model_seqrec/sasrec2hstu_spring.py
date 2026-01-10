@@ -134,6 +134,7 @@ class SASRec2HSTUSpringModel(SeqRecModel[SASRec2HSTUSpringModelConfig, SASRec2HS
                     attention_bias=config.attention_bias,
                     ffn_bias=config.ffn_bias,
                     attention_type=config.attention_type,
+                    add_ffn=config.add_ffn,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
