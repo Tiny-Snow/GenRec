@@ -42,6 +42,7 @@ class SASRec2HSTUSpringModelConfig(SASRecModelConfig):
         spring_emb_weight: float = 0.1,
         spring_attention_temperature: float = 4.0,
         spectral_norm_iters: int = 1,
+        add_ffn: bool = True,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
@@ -65,6 +66,8 @@ class SASRec2HSTUSpringModelConfig(SASRecModelConfig):
                 on attention module. Default is 4.0.
             spectral_norm_iters (int): Number of power iteration steps for spectral norm
                 estimation. Default is 1.
+            add_ffn (bool): Whether to add feed-forward network after attention in each layer.
+                default is False.
             **kwargs (Any): Additional keyword arguments for the base `SASRecModelConfig`.
         """
         super().__init__(**kwargs)
@@ -77,6 +80,7 @@ class SASRec2HSTUSpringModelConfig(SASRecModelConfig):
         self.spring_emb_weight = spring_emb_weight
         self.spring_attention_temperature = spring_attention_temperature
         self.spectral_norm_iters = spectral_norm_iters
+        self.add_ffn = add_ffn
 
 
 @SeqRecOutputFactory.register("sasrec2hstu_spring")
