@@ -148,6 +148,8 @@ class LlamaDecoder2HSTULayer(nn.Module):
         else:
             raise ValueError(f"Unsupported attention_type: {self.attention_type}")
         self.input_layernorm = RMSNorm(hidden_size)
+        self.mlp: Optional[SwiGLU] = None
+        self.post_attention_layernorm: Optional[RMSNorm] = None
         if self.add_ffn:
             self.mlp = SwiGLU(
                 hidden_size=hidden_size,
