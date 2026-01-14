@@ -340,6 +340,10 @@ class SASRec2HSTUSpringModel(SeqRecModel[SASRec2HSTUSpringModelConfig, SASRec2HS
         causal_mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
         attn_weight = attn_weight.masked_fill(causal_mask.squeeze(1), 0.0)
 
+        # normalize attention weights along the last dimension
+        key_sums: Float[torch.Tensor, "B L 1"] = attn_weight.sum(dim=-1, keepdim=True)
+        attn_weight = attn_weight / (key_sums + 1e-12)
+
         query_sums: Float[torch.Tensor, "B*L"] = attn_weight.sum(dim=-2).flatten()
         attention_mask_flat: Bool[torch.Tensor, "B*L"] = attention_mask.bool().flatten()
         masked_query_sums: Float[torch.Tensor, "M"] = query_sums[attention_mask_flat]
