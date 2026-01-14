@@ -40,6 +40,7 @@ class LlamaDecoder2HSTULayer(nn.Module):
         attention_bias: bool = False,
         ffn_bias: bool = False,
         attention_type: str = "softmax",
+        add_ffn: bool = True,
     ) -> None:
         """Initializes StandardDecoderLayer module.
 
@@ -64,6 +65,7 @@ class LlamaDecoder2HSTULayer(nn.Module):
         self.attention_bias = attention_bias
         self.ffn_bias = ffn_bias
         self.attention_type = attention_type
+        self.add_ffn = add_ffn
 
         if self.attention_type == "softmax":
             self.self_attn = MaskedSelfAttentionWithRoPE(
@@ -145,13 +147,16 @@ class LlamaDecoder2HSTULayer(nn.Module):
             )
         else:
             raise ValueError(f"Unsupported attention_type: {self.attention_type}")
-        self.mlp = SwiGLU(
-            hidden_size=hidden_size,
-            intermediate_size=intermediate_size,
-            ffn_bias=ffn_bias,
-        )
         self.input_layernorm = RMSNorm(hidden_size)
-        self.post_attention_layernorm = RMSNorm(hidden_size)
+        self.mlp: Optional[SwiGLU] = None
+        self.post_attention_layernorm: Optional[RMSNorm] = None
+        if self.add_ffn:
+            self.mlp = SwiGLU(
+                hidden_size=hidden_size,
+                intermediate_size=intermediate_size,
+                ffn_bias=ffn_bias,
+            )
+            self.post_attention_layernorm = RMSNorm(hidden_size)
 
     def forward(
         self,
@@ -183,9 +188,11 @@ class LlamaDecoder2HSTULayer(nn.Module):
         )
         hidden_states = residual + hidden_states
 
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = residual + self.mlp(hidden_states)
+        # Optional feed-forward network
+        if self.add_ffn and self.mlp is not None and self.post_attention_layernorm is not None:
+            residual = hidden_states
+            hidden_states = self.post_attention_layernorm(hidden_states)
+            hidden_states = residual + self.mlp(hidden_states)
 
         return hidden_states, attn_weights
 
