@@ -8,8 +8,15 @@ from typing import List, Optional, Tuple
 from jaxtyping import Bool, Float, Int
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-from ..modules import LearnableInputPositionalEmbedding, RMSNorm, SequentialTransductionUnit, create_attention_mask
+from ..modules import (
+    LearnableInputPositionalEmbedding,
+    RMSNorm,
+    RotaryEmbedding,
+    SequentialTransductionUnit,
+    create_attention_mask,
+)
 from .base import SeqRecModel, SeqRecModelFactory, SeqRecModelConfigFactory, SeqRecOutputFactory
 from .hstu import HSTUModelConfig, HSTUModelOutput
 
@@ -41,7 +48,7 @@ class HSTUSpringModelConfig(HSTUModelConfig):
             spring_attention_weight (float): Weight for the Spring regularization on
                 attention module. Default is 1.0.
             spring_ffn_weight (float): Weight for the Spring regularization on feed-forward
-                network module. Note that this is only effective when `add_ffn` is True in
+                network module. Note that this is only effective when `enable_ffn` is True in
                 the base `HSTUModelConfig`. Default is 0.001.
             spring_emb_weight (float): Weight for the Spring regularization on item
                 embedding matrix. Default is 0.1.
@@ -101,36 +108,39 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
         self.head_dim = config.hidden_size // config.num_attention_heads
 
         # NOTE: in HSTU, the dropout_rate of input embeddings and GLU are both set to linear_dropout.
-        self.input_pos_emb = LearnableInputPositionalEmbedding(
-            max_position_embeddings=config.max_seq_len,
-            embed_dim=config.hidden_size,
-            dropout_rate=config.linear_dropout,
-        )
+        self.input_pos_emb: Optional[LearnableInputPositionalEmbedding] = None
+        if config.enable_input_pos_emb:
+            self.input_pos_emb = LearnableInputPositionalEmbedding(
+                max_position_embeddings=config.max_seq_len,
+                embed_dim=config.hidden_size,
+                dropout_rate=config.linear_dropout,
+            )
+
+        self.rotary_emb: Optional[RotaryEmbedding] = None
+        if not config.enable_learnable_rel_posemb:
+            self.rotary_emb = RotaryEmbedding(head_dim=self.head_dim)
 
         self.layers = nn.ModuleList(
             [
                 SequentialTransductionUnit(
                     hidden_size=config.hidden_size,
                     num_heads=config.num_attention_heads,
+                    intermediate_size=config.hidden_size * 4,
+                    attention_dropout=config.attention_dropout,
+                    linear_dropout=config.linear_dropout,
                     max_seq_len=config.max_seq_len,
                     num_buckets=config.num_buckets,
-                    linear_dropout=config.linear_dropout,
-                    attention_dropout=config.attention_dropout,
-                    add_ffn=config.add_ffn,
-                    softmax_attention=config.softmax_attention,
-                    attention_norm=config.attention_norm,
-                    time_interval=config.time_interval,
-                    relative_position_bias=config.relative_position_bias,
-                    attention_gating=config.attention_gating,
+                    enable_learnable_rel_posemb=config.enable_learnable_rel_posemb,
+                    enable_attention_gating=config.enable_attention_gating,
+                    enable_ffn=config.enable_ffn,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
         )
 
-        if config.final_layer_norm:
-            self.final_layer_norm = RMSNorm(config.hidden_size)
-        else:
-            self.final_layer_norm = nn.Identity()
+        self.final_layernorm: Optional[RMSNorm] = None
+        if config.enable_final_layernorm:
+            self.final_layernorm = RMSNorm(config.hidden_size)
 
         self.gradient_checkpointing = False  # disable gradient checkpointing by default
         self.post_init()  # use PretrainedModel's default weight initialization
@@ -159,8 +169,9 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
                 The timestamps are assumed to be Unix format (in seconds).
 
         Returns:
-            HSTUSpringModelOutput: Model outputs packaged as a `HSTUSpringModelOutput` descendant.
+            HSTUSpringModelOutput: Model outputs packaged as a `HSTUSpringModelOutput` instance.
         """
+        d, H = self.config.hidden_size, self.config.num_attention_heads
 
         timestamps: Optional[Int[torch.Tensor, "B L"]] = kwargs.pop("timestamps", None)
         if timestamps is None:  # pragma: no cover - defensive check
@@ -169,14 +180,17 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
         hidden_states: Float[torch.Tensor, "B L d"]
         hidden_states = self.embed_tokens(input_ids)
 
-        causal_mask: Bool[torch.Tensor, "B 1 L L"]
-        causal_mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
-        causal_mask = ~causal_mask  # True for valid positions, False for masked positions.
+        causal_mask: Float[torch.Tensor, "B 1 L L"]
+        causal_mask = create_attention_mask(attention_mask, is_causal=True)
 
-        all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
-        all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
+        position_embeddings: Optional[
+            Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]
+        ] = None
+        if not self.config.enable_learnable_rel_posemb and self.rotary_emb is not None:
+            position_embeddings = self.rotary_emb(hidden_states)
 
-        d, H = self.config.hidden_size, self.config.num_attention_heads
+        if self.config.enable_input_pos_emb and self.input_pos_emb is not None:
+            hidden_states = self.input_pos_emb(hidden_states)
 
         # Spring regularizations
         spring_loss_emb = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
@@ -185,13 +199,14 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
 
         # Spring regularization on item embeddings
         if output_model_loss:
-            item_embed_weight = self.item_embed_weight
+            item_embed_weight: Float[torch.Tensor, "I+1 d"] = self.item_embed_weight
             if self.config.norm_embeddings:
-                item_embed_weight = nn.functional.normalize(item_embed_weight, p=2, dim=-1)
+                item_embed_weight = F.normalize(item_embed_weight, p=2, dim=-1)
             item_emb_sn = self._power_iteration(item_embed_weight, name="item_embed_weight")
             spring_loss_emb = item_emb_sn.log1p()
 
-        hidden_states = self.input_pos_emb(hidden_states)
+        all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
+        all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
 
         for layer_idx, layer in enumerate(self.layers):
             if output_hidden_states:
@@ -200,6 +215,7 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
             hidden_states, attn_weights = layer(
                 hidden_states,
                 attention_mask=causal_mask,
+                position_embeddings=position_embeddings,
                 timestamps=timestamps,
             )
 
@@ -208,11 +224,11 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
 
             if output_model_loss:
                 # Spring regularization on o_proj
-                attn_Wo: Float[torch.Tensor, "d H*d_head"] = layer.o_proj.weight
+                attn_Wo: Float[torch.Tensor, "d H*d_head"] = layer.self_attn.o_proj.weight
                 attn_Wo_sn = self._power_iteration(attn_Wo, name=f"attn_{layer_idx}_wo")
 
                 # Spring regularization on v_proj and attn weights
-                attn_Wv: Float[torch.Tensor, "H d_head d"] = layer.v_proj[0].weight.view(H, self.head_dim, d)
+                attn_Wv: Float[torch.Tensor, "H d_head d"] = layer.self_attn.v_proj.weight.view(H, self.head_dim, d)
                 attn_Av_sn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
                 for head in range(H):
                     attn_Wv_h: Float[torch.Tensor, "d_head d"] = attn_Wv[head]
@@ -224,9 +240,8 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
                 # Spring regularization on attention module
                 spring_loss_attn = spring_loss_attn + (attn_Av_sn.sqrt() * attn_Wo_sn).log1p()
 
-                # Spring regularization on optional FFN module
-                if self.config.add_ffn:
-                    assert layer.mlp is not None, "FFN module must be present when add_ffn is True."
+                # Spring regularization on FFN modules
+                if self.config.enable_ffn:
                     ffn_W1 = layer.mlp.up_proj.weight
                     ffn_W2 = layer.mlp.down_proj.weight
                     ffn_W1_sn = self._power_iteration(ffn_W1, name=f"ffn_{layer_idx}_w1")
@@ -247,7 +262,8 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
         # NOTE: in the official HSTU code, there is no final layer norm,
         # as it apply L2 normalization after getting the final item representations.
         # Here we still keep an optional final layer norm for other loss functions' sake.
-        hidden_states = self.final_layer_norm(hidden_states)
+        if self.config.enable_final_layernorm and self.final_layernorm is not None:
+            hidden_states = self.final_layernorm(hidden_states)
 
         if output_hidden_states:
             all_hidden_states.append(hidden_states)
@@ -331,10 +347,10 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
         The padding positions are masked out by the `attention_mask`.
 
         .. note::
-            Although the attention weights in HSTU are not row-stochastic, i.e., the
-            spectral norm is actually upper bounded by the square root of the product
-            of the 1-norm and infinity-norm, we only use the 1-norm here for better
-            computational efficiency and practical performance.
+            The SiLU-based attention in HSTU makes the attention weights non-normalized
+            in each row, so the infinity-norm is not guaranteed to be 1. However, we
+            did not observe significant performance difference when adding the infinity-norm
+            term in our experiments.
 
         Args:
             attn_weight (Float[torch.Tensor, "B L L"]): Attention weight tensor

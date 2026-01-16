@@ -1,6 +1,3 @@
-import copy
-
-import pytest
 import torch
 
 from genrec.models.modules.layers import LlamaDecoderLayer, SequentialTransductionUnit
@@ -22,11 +19,11 @@ def test_standard_decoder_layer_outputs_expected_shapes() -> None:
 
     batch_size, seq_len = 2, 5
     hidden_states = torch.randn(batch_size, seq_len, hidden_size)
-    base_mask = torch.ones(batch_size, seq_len, dtype=torch.float32)
+    base_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
     causal_mask = create_attention_mask(base_mask, is_causal=True)
 
     rotary = RotaryEmbedding(head_dim=layer.head_dim)
-    position_embeddings = rotary(torch.zeros(batch_size, seq_len, layer.head_dim))
+    position_embeddings = rotary(hidden_states)
 
     outputs, attn_weights = layer(
         hidden_states=hidden_states,
@@ -38,28 +35,34 @@ def test_standard_decoder_layer_outputs_expected_shapes() -> None:
     assert attn_weights.shape == (batch_size, num_heads, seq_len, seq_len)
 
 
-def test_sequential_transduction_unit_respects_attention_mask() -> None:
-    hidden_size = 8
-    num_heads = 2
-    seq_len = 4
+def test_sequential_transduction_unit_outputs_expected_shapes() -> None:
+    hidden_size = 16
+    num_heads = 4
+    seq_len = 6
     unit = SequentialTransductionUnit(
         hidden_size=hidden_size,
         num_heads=num_heads,
-        max_seq_len=seq_len,
-        num_buckets=4,
-        linear_dropout=0.0,
+        intermediate_size=hidden_size * 2,
         attention_dropout=0.0,
+        linear_dropout=0.0,
+        max_seq_len=seq_len,
+        num_buckets=8,
+        enable_learnable_rel_posemb=True,
+        enable_attention_gating=True,
+        enable_ffn=False,
     )
 
     batch_size = 2
     hidden_states = torch.randn(batch_size, seq_len, hidden_size)
-    attention_mask = torch.ones(batch_size, 1, seq_len, seq_len, dtype=torch.bool)
-    attention_mask[:, :, :, -1] = False
+    base_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
+    base_mask[:, -1] = 0
+    attention_mask = create_attention_mask(base_mask, is_causal=True)
     timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
 
     outputs, attn_weights = unit(
         hidden_states=hidden_states,
         attention_mask=attention_mask,
+        position_embeddings=None,
         timestamps=timestamps,
     )
 
@@ -68,25 +71,32 @@ def test_sequential_transduction_unit_respects_attention_mask() -> None:
     assert torch.all(attn_weights[..., -1] == 0)
 
 
-def test_sequential_transduction_unit_handles_missing_timestamps_and_mask() -> None:
-    hidden_size = 6
-    num_heads = 2
-    seq_len = 3
+def test_sequential_transduction_unit_supports_rope_position_embeddings() -> None:
+    hidden_size = 12
+    num_heads = 3
+    seq_len = 5
     unit = SequentialTransductionUnit(
         hidden_size=hidden_size,
         num_heads=num_heads,
-        max_seq_len=seq_len,
-        num_buckets=2,
-        linear_dropout=0.0,
+        intermediate_size=hidden_size * 2,
         attention_dropout=0.0,
+        linear_dropout=0.0,
+        max_seq_len=seq_len,
+        num_buckets=4,
+        enable_learnable_rel_posemb=False,
+        enable_attention_gating=True,
+        enable_ffn=False,
     )
 
-    batch_size = 1
+    batch_size = 2
     hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+    rotary = RotaryEmbedding(head_dim=hidden_size // num_heads)
+    position_embeddings = rotary(hidden_states)
 
     outputs, attn_weights = unit(
         hidden_states=hidden_states,
         attention_mask=None,
+        position_embeddings=position_embeddings,
         timestamps=None,
     )
 
@@ -94,226 +104,142 @@ def test_sequential_transduction_unit_handles_missing_timestamps_and_mask() -> N
     assert attn_weights.shape == (batch_size, num_heads, seq_len, seq_len)
 
 
-def test_sequential_transduction_unit_softmax_attention_normalizes_weights() -> None:
-    hidden_size = 8
-    num_heads = 2
-    seq_len = 3
-    unit = SequentialTransductionUnit(
-        hidden_size=hidden_size,
-        num_heads=num_heads,
-        max_seq_len=seq_len,
-        num_buckets=4,
-        linear_dropout=0.0,
-        attention_dropout=0.0,
-        softmax_attention=True,
-    )
-    unit.eval()
-
-    batch_size = 2
-    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
-
-    _, attn_weights = unit(
-        hidden_states=hidden_states,
-        attention_mask=None,
-        timestamps=None,
-    )
-
-    assert attn_weights.shape == (batch_size, num_heads, seq_len, seq_len)
-    row_sums = attn_weights.sum(dim=-1)
-    assert torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-5)
-    assert torch.all(attn_weights >= 0)
-
-
-def test_sequential_transduction_unit_attention_norm_normalizes_weights() -> None:
-    hidden_size = 8
-    num_heads = 2
+def test_sequential_transduction_unit_passes_timestamps_through_attention() -> None:
+    hidden_size = 12
+    num_heads = 3
     seq_len = 4
     unit = SequentialTransductionUnit(
         hidden_size=hidden_size,
         num_heads=num_heads,
+        intermediate_size=hidden_size * 2,
+        attention_dropout=0.0,
+        linear_dropout=0.0,
         max_seq_len=seq_len,
         num_buckets=4,
-        linear_dropout=0.0,
-        attention_dropout=0.0,
-        softmax_attention=False,
-        attention_norm=True,
+        enable_learnable_rel_posemb=True,
+        enable_attention_gating=True,
+        enable_ffn=False,
     )
-    unit.eval()
 
-    batch_size = 3
+    class RecordingAttention(torch.nn.Module):
+        def __init__(self, num_heads: int) -> None:
+            super().__init__()
+            self.num_heads = num_heads
+            self.received_timestamps = None
+
+        def forward(
+            self,
+            hidden_states: torch.Tensor,
+            attention_mask=None,
+            position_embeddings=None,
+            timestamps=None,
+        ):
+            self.received_timestamps = timestamps
+            batch, seq_len, _ = hidden_states.shape
+            attn_weights = torch.zeros(
+                batch,
+                self.num_heads,
+                seq_len,
+                seq_len,
+                dtype=hidden_states.dtype,
+                device=hidden_states.device,
+            )
+            return hidden_states, attn_weights
+
+    recorder = RecordingAttention(num_heads=num_heads)
+    unit.self_attn = recorder
+
+    batch_size = 2
     hidden_states = torch.randn(batch_size, seq_len, hidden_size)
+    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
 
-    _, attn_weights = unit(
+    outputs, attn_weights = unit(
         hidden_states=hidden_states,
         attention_mask=None,
-        timestamps=None,
+        position_embeddings=None,
+        timestamps=timestamps,
     )
 
+    assert recorder.received_timestamps is not None
+    assert torch.equal(recorder.received_timestamps, timestamps)
+    assert outputs.shape == (batch_size, seq_len, hidden_size)
     assert attn_weights.shape == (batch_size, num_heads, seq_len, seq_len)
-    row_sums = attn_weights.sum(dim=-1)
-    assert torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-5)
 
 
-def test_sequential_transduction_unit_relative_position_bias_toggle_changes_outputs() -> None:
-    torch.manual_seed(0)
-    hidden_size = 8
+def test_sequential_transduction_unit_attention_gating_toggle_disables_gate() -> None:
+    hidden_size = 10
     num_heads = 2
     seq_len = 4
-    batch_size = 2
-
-    unit_with_bias = SequentialTransductionUnit(
+    unit = SequentialTransductionUnit(
         hidden_size=hidden_size,
         num_heads=num_heads,
+        intermediate_size=hidden_size * 2,
+        attention_dropout=0.0,
+        linear_dropout=0.0,
         max_seq_len=seq_len,
         num_buckets=4,
-        linear_dropout=0.0,
-        attention_dropout=0.0,
-        relative_position_bias=True,
-    )
-    unit_without_bias = SequentialTransductionUnit(
-        hidden_size=hidden_size,
-        num_heads=num_heads,
-        max_seq_len=seq_len,
-        num_buckets=4,
-        linear_dropout=0.0,
-        attention_dropout=0.0,
-        relative_position_bias=False,
+        enable_learnable_rel_posemb=True,
+        enable_attention_gating=False,
+        enable_ffn=False,
     )
 
-    state_dict = copy.deepcopy(unit_with_bias.state_dict())
-    unit_without_bias.load_state_dict(state_dict, strict=False)
+    assert unit.enable_attention_gating is False
+    assert unit.self_attn.enable_attention_gating is False
+    assert unit.self_attn.u_proj is None
+    assert unit.self_attn.av_output_layernorm is None
 
-    unit_with_bias.eval()
-    unit_without_bias.eval()
-
-    if unit_with_bias.rel_attn_bias is not None:
-        unit_with_bias.rel_attn_bias.time_bias_table.weight.data.fill_(0.5)
-        unit_with_bias.rel_attn_bias.pos_bias_table.weight.data.fill_(0.1)
-
+    batch_size = 1
     hidden_states = torch.randn(batch_size, seq_len, hidden_size)
-    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
 
-    out_with_bias, attn_with_bias = unit_with_bias(
+    outputs, _ = unit(
         hidden_states=hidden_states,
         attention_mask=None,
-        timestamps=timestamps,
-    )
-    out_without_bias, attn_without_bias = unit_without_bias(
-        hidden_states=hidden_states,
-        attention_mask=None,
+        position_embeddings=None,
         timestamps=timestamps,
     )
 
-    assert not torch.allclose(out_with_bias, out_without_bias)
-    assert not torch.allclose(attn_with_bias, attn_without_bias)
+    assert outputs.shape == (batch_size, seq_len, hidden_size)
 
 
-def test_sequential_transduction_unit_time_interval_matches_manual_scaling() -> None:
-    hidden_size = 6
+def test_sequential_transduction_unit_ffn_path_invokes_mlp() -> None:
+    hidden_size = 14
     num_heads = 2
     seq_len = 4
-    time_interval = 86_400
-
-    unit_seconds = SequentialTransductionUnit(
+    unit = SequentialTransductionUnit(
         hidden_size=hidden_size,
         num_heads=num_heads,
-        max_seq_len=seq_len,
-        num_buckets=8,
-        linear_dropout=0.0,
+        intermediate_size=hidden_size * 2,
         attention_dropout=0.0,
-        time_interval=time_interval,
-    )
-    unit_scaled = SequentialTransductionUnit(
-        hidden_size=hidden_size,
-        num_heads=num_heads,
-        max_seq_len=seq_len,
-        num_buckets=8,
         linear_dropout=0.0,
-        attention_dropout=0.0,
-        time_interval=1.0,
-    )
-    unit_scaled.load_state_dict(unit_seconds.state_dict())
-    unit_seconds.eval()
-    unit_scaled.eval()
-
-    batch_size = 2
-    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
-    timestamps_seconds = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1) * time_interval
-    timestamps_scaled = timestamps_seconds // time_interval
-
-    out_seconds, attn_seconds = unit_seconds(
-        hidden_states=hidden_states,
-        attention_mask=None,
-        timestamps=timestamps_seconds,
-    )
-    out_scaled, attn_scaled = unit_scaled(
-        hidden_states=hidden_states,
-        attention_mask=None,
-        timestamps=timestamps_scaled,
-    )
-
-    assert torch.allclose(out_seconds, out_scaled, atol=1e-5)
-    assert torch.allclose(attn_seconds, attn_scaled, atol=1e-5)
-
-
-def test_sequential_transduction_unit_rejects_non_positive_time_interval() -> None:
-    with pytest.raises(ValueError):
-        SequentialTransductionUnit(
-            hidden_size=4,
-            num_heads=2,
-            max_seq_len=4,
-            num_buckets=2,
-            linear_dropout=0.0,
-            attention_dropout=0.0,
-            time_interval=0.0,
-        )
-
-
-def test_sequential_transduction_unit_attention_gating_toggle_changes_outputs() -> None:
-    torch.manual_seed(0)
-    hidden_size = 8
-    num_heads = 2
-    seq_len = 4
-    batch_size = 2
-
-    unit_gated = SequentialTransductionUnit(
-        hidden_size=hidden_size,
-        num_heads=num_heads,
         max_seq_len=seq_len,
         num_buckets=4,
-        linear_dropout=0.0,
-        attention_dropout=0.0,
-        attention_gating=True,
-    )
-    torch.manual_seed(0)
-    unit_no_gate = SequentialTransductionUnit(
-        hidden_size=hidden_size,
-        num_heads=num_heads,
-        max_seq_len=seq_len,
-        num_buckets=4,
-        linear_dropout=0.0,
-        attention_dropout=0.0,
-        attention_gating=False,
+        enable_learnable_rel_posemb=True,
+        enable_attention_gating=True,
+        enable_ffn=True,
     )
 
-    assert unit_gated.u_proj is not None
-    assert unit_gated.attn_output_layernorm is not None
-    assert unit_no_gate.u_proj is None
-    assert unit_no_gate.attn_output_layernorm is None
+    class RecordingMLP(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.called = False
 
-    hidden_states = torch.randn(batch_size, seq_len, hidden_size)
-    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+        def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+            self.called = True
+            return hidden_states
 
-    out_gated, _ = unit_gated(
+    assert unit.mlp is not None
+    unit.mlp = RecordingMLP()
+
+    hidden_states = torch.randn(1, seq_len, hidden_size)
+    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+
+    _ = unit(
         hidden_states=hidden_states,
         attention_mask=None,
-        timestamps=timestamps,
-    )
-    out_no_gate, _ = unit_no_gate(
-        hidden_states=hidden_states,
-        attention_mask=None,
+        position_embeddings=None,
         timestamps=timestamps,
     )
 
-    assert out_gated.shape == out_no_gate.shape
-    assert not torch.allclose(out_gated, out_no_gate)
+    assert isinstance(unit.mlp, RecordingMLP)
+    assert unit.mlp.called

@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from jaxtyping import Bool, Float, Int
+from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
 
-from ..modules import LearnableInputPositionalEmbedding, RMSNorm, SequentialTransductionUnit, create_attention_mask
+from ..modules import (
+    LearnableInputPositionalEmbedding,
+    RMSNorm,
+    RotaryEmbedding,
+    SequentialTransductionUnit,
+    create_attention_mask,
+)
 from .base import (
     SeqRecModel,
     SeqRecModelConfig,
@@ -32,53 +38,46 @@ class HSTUModelConfig(SeqRecModelConfig):
 
     def __init__(
         self,
-        max_seq_len: int = 512,
-        num_buckets: int = 128,
         linear_dropout: float = 0.0,
         attention_dropout: float = 0.0,
-        final_layer_norm: bool = False,
-        add_ffn: bool = False,
-        softmax_attention: bool = False,
-        attention_norm: bool = False,
-        time_interval: float = 1.0,
-        relative_position_bias: bool = True,
-        attention_gating: bool = True,
+        max_seq_len: int = 512,
+        num_buckets: int = 128,
+        enable_input_pos_emb: bool = True,
+        enable_learnable_rel_posemb: bool = True,
+        enable_attention_gating: bool = True,
+        enable_ffn: bool = False,
+        enable_final_layernorm: bool = False,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
 
         Args:
-            max_seq_len (int): Maximum sequence length for the model. It is used for configuring
-                learnable positional embeddings. Default is 512.
-            num_buckets (int): Number of buckets for relative position and time embeddings.
-                Default is 128.
-            linear_dropout (float): Dropout rate for input embeddings and GLU. Default is 0.0.
+            linear_dropout (float): Dropout rate for input embeddings and attention output before
+                the final output projection, which is applied in `av_output` when `attention_gating`
+                is enabled. Default is 0.0.
             attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
-            final_layer_norm (bool): Whether to apply a final layer normalization. Default is False.
-            add_ffn (bool): Whether to add feed-forward network after attention in each HSTU layer.
-                default is False.
-            softmax_attention (bool): Whether to use softmax-based attention mechanism rather than
-                the original silu-based attention mechanism. Default is False.
-            attention_norm (bool): Whether to apply row-wise normalization to attention scores.
-                Default is False.
-            time_interval (float): Factor to divide Unix timestamps by before bucketization. Default is 1.0
-                (seconds). Use larger values (e.g., 86400) to operate on coarser units such as days.
-            relative_position_bias (bool): Whether to use relative position bias. Default is True.
-            attention_gating (bool): Whether to use attention gating mechanism. Default is True.
+            max_seq_len (int): Maximum sequence length for relative positional embeddings. Default is 512.
+            num_buckets (int): Number of buckets for relative positional embeddings. Default is 128.
+            enable_input_pos_emb (bool): Whether to use learnable input positional embeddings. Default is True.
+            enable_learnable_rel_posemb (bool): Whether to use learnable relative positional embeddings.
+                If False, RoPE will be used instead. Default is True.
+            enable_attention_gating (bool): Whether to enable the attention gating mechanism. If False,
+                standard attention computation is used. Default is True.
+            enable_ffn (bool): Whether to include a feed-forward network after attention. Default is False.
+            enable_final_layernorm (bool): Whether to apply a final layer normalization after the last HSTU layer.
+                This is recommended when using dot-product-based loss functions. Default is False.
             **kwargs (Any): Additional keyword arguments for the base `SeqRecModelConfig`.
         """
         super().__init__(**kwargs)
-        self.max_seq_len = max_seq_len
-        self.num_buckets = num_buckets
         self.linear_dropout = linear_dropout
         self.attention_dropout = attention_dropout
-        self.final_layer_norm = final_layer_norm
-        self.add_ffn = add_ffn
-        self.softmax_attention = softmax_attention
-        self.attention_norm = attention_norm
-        self.time_interval = time_interval
-        self.relative_position_bias = relative_position_bias
-        self.attention_gating = attention_gating
+        self.max_seq_len = max_seq_len
+        self.num_buckets = num_buckets
+        self.enable_input_pos_emb = enable_input_pos_emb
+        self.enable_learnable_rel_posemb = enable_learnable_rel_posemb
+        self.enable_attention_gating = enable_attention_gating
+        self.enable_ffn = enable_ffn
+        self.enable_final_layernorm = enable_final_layernorm
 
 
 @SeqRecOutputFactory.register("hstu")
@@ -96,26 +95,27 @@ class HSTUModelOutput(SeqRecOutput):
 class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
     """HSTU model implementation.
 
-    Here we implement HSTU (Hierarchical Sequential Transformer Unit) based on its
-    official code (https://github.com/meta-recsys/generative-recommenders). Some
-    slight modifications are made as follows:
+    Here we implement HSTU (Hierarchical Sequential Transformer Unit) based on the Meta's
+    official code (https://github.com/meta-recsys/generative-recommenders). We generalize
+    the original implementation to allow more flexibility in model configuration and boost
+    model performance. The main differences are summarized as follows:
 
     - The input positional embeddings are implemented using `LearnableInputPositionalEmbedding`,
-        which directly adds learnable positional embeddings to the input embeddings
-        without scaling with sqrt(hidden_size).
+        which directly adds learnable positional embeddings to the input embeddings without
+        scaling with sqrt(hidden_size). We also provide an option `enable_input_pos_emb` to disable
+        input positional embeddings.
     - All the layer normalizations are implemented using `RMSNorm`. We also provide an option
-        to apply a final layer normalization after the last HSTU layer.
+        `enable_final_layernorm` to apply a final layer normalization after the last HSTU layer.
     - Changes the industrial implementation of relative position and time attention bias
         to a more readable `RelativeBucketedTimeAndPositionAttentionBias`.
-    - Provide an option to add feed-forward network after attention in each HSTU layer.
-    - Provide an option to apply softmax-based attention rather than the original
-        silu-based attention mechanism, as well as an option to apply row-wise normalization
-        to attention scores before applying softmax, which may be more effective in some cases.
-    - Provide an option to enable/disable relative position bias. If enabled, the relative
-        position bias is added together with attention scores based on time intervals and
-        position differences. We also allow the user to adjust the granularity of time intervals
-        by setting the `time_interval` parameter in the model configuration.
-    - Provide an option to enable/disable attention gating mechanism in HSTU.
+    - Provide an option `enable_learnable_rel_posemb` to switch the original learnable relative
+        positional embeddings with Rotary Positional Embeddings (RoPE) for better extrapolation
+        to longer sequences and improved performance.
+    - Provide an option `enable_attention_gating` to disable the original attention gating mechanism,
+        allowing for a standard attention computation, which can be beneficial in certain scenarios
+        where gating may not be stable.
+    - Provide an option `enable_ffn` to restore the FFN after attention, which was removed in the
+        original STU design, to enhance the model's capacity.
 
     References:
         - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
@@ -135,36 +135,39 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
         self.head_dim = config.hidden_size // config.num_attention_heads
 
         # NOTE: in HSTU, the dropout_rate of input embeddings and GLU are both set to linear_dropout.
-        self.input_pos_emb = LearnableInputPositionalEmbedding(
-            max_position_embeddings=config.max_seq_len,
-            embed_dim=config.hidden_size,
-            dropout_rate=config.linear_dropout,
-        )
+        self.input_pos_emb: Optional[LearnableInputPositionalEmbedding] = None
+        if config.enable_input_pos_emb:
+            self.input_pos_emb = LearnableInputPositionalEmbedding(
+                max_position_embeddings=config.max_seq_len,
+                embed_dim=config.hidden_size,
+                dropout_rate=config.linear_dropout,
+            )
+
+        self.rotary_emb: Optional[RotaryEmbedding] = None
+        if not config.enable_learnable_rel_posemb:
+            self.rotary_emb = RotaryEmbedding(head_dim=self.head_dim)
 
         self.layers = nn.ModuleList(
             [
                 SequentialTransductionUnit(
                     hidden_size=config.hidden_size,
                     num_heads=config.num_attention_heads,
+                    intermediate_size=config.hidden_size * 4,
+                    attention_dropout=config.attention_dropout,
+                    linear_dropout=config.linear_dropout,
                     max_seq_len=config.max_seq_len,
                     num_buckets=config.num_buckets,
-                    linear_dropout=config.linear_dropout,
-                    attention_dropout=config.attention_dropout,
-                    add_ffn=config.add_ffn,
-                    softmax_attention=config.softmax_attention,
-                    attention_norm=config.attention_norm,
-                    time_interval=config.time_interval,
-                    relative_position_bias=config.relative_position_bias,
-                    attention_gating=config.attention_gating,
+                    enable_learnable_rel_posemb=config.enable_learnable_rel_posemb,
+                    enable_attention_gating=config.enable_attention_gating,
+                    enable_ffn=config.enable_ffn,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
         )
 
-        if config.final_layer_norm:
-            self.final_layer_norm = RMSNorm(config.hidden_size)
-        else:
-            self.final_layer_norm = nn.Identity()
+        self.final_layernorm: Optional[RMSNorm] = None
+        if config.enable_final_layernorm:
+            self.final_layernorm = RMSNorm(config.hidden_size)
 
         self.gradient_checkpointing = False  # disable gradient checkpointing by default
         self.post_init()  # use PretrainedModel's default weight initialization
@@ -203,15 +206,21 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
         hidden_states: Float[torch.Tensor, "B L d"]
         hidden_states = self.embed_tokens(input_ids)
 
-        causal_mask: Bool[torch.Tensor, "B 1 L L"]
-        causal_mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
-        causal_mask = ~causal_mask  # True for valid positions, False for masked positions.
+        causal_mask: Float[torch.Tensor, "B 1 L L"]
+        causal_mask = create_attention_mask(attention_mask, is_causal=True)
+
+        position_embeddings: Optional[
+            Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]
+        ] = None
+        if not self.config.enable_learnable_rel_posemb and self.rotary_emb is not None:
+            position_embeddings = self.rotary_emb(hidden_states)
 
         model_loss = None  # By default, HSTU does not compute model loss internally.
         all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
         all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
 
-        hidden_states = self.input_pos_emb(hidden_states)
+        if self.config.enable_input_pos_emb and self.input_pos_emb is not None:
+            hidden_states = self.input_pos_emb(hidden_states)
 
         for layer in self.layers:
             if output_hidden_states:
@@ -220,6 +229,7 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
             hidden_states, attn_weights = layer(
                 hidden_states,
                 attention_mask=causal_mask,
+                position_embeddings=position_embeddings,
                 timestamps=timestamps,
             )
 
@@ -229,7 +239,8 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
         # NOTE: in the official HSTU code, there is no final layer norm,
         # as it apply L2 normalization after getting the final item representations.
         # Here we still keep an optional final layer norm for other loss functions' sake.
-        hidden_states = self.final_layer_norm(hidden_states)
+        if self.config.enable_final_layernorm and self.final_layernorm is not None:
+            hidden_states = self.final_layernorm(hidden_states)
 
         if output_hidden_states:
             all_hidden_states.append(hidden_states)

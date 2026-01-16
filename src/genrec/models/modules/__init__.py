@@ -2,15 +2,17 @@
 
 __all__ = []
 
-from .attention import MaskedSelfAttentionWithRoPE
+from .attention import MaskedHSTUAttention, MaskedSelfAttentionWithRoPE
 
 __all__ += [
+    "MaskedHSTUAttention",
     "MaskedSelfAttentionWithRoPE",
 ]
 
-from .feedforward import SwiGLU
+from .feedforward import FeedForwardNetwork, SwiGLU
 
 __all__ += [
+    "FeedForwardNetwork",
     "SwiGLU",
 ]
 

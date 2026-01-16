@@ -1,45 +1,50 @@
 import pytest
 import torch
+import torch.nn.functional as F
 
 from genrec.models.model_seqrec.hstu_spring import HSTUSpringModel, HSTUSpringModelConfig
 from genrec.models.modules.utils import create_attention_mask
 
 
-def _dummy_inputs(
-    config: HSTUSpringModelConfig, batch_size: int = 2, seq_len: int = 5
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))
-    attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
-    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
-    return input_ids, attention_mask, timestamps
-
-
-def test_hstu_spring_returns_weighted_model_loss(monkeypatch):
+def test_hstu_spring_returns_weighted_model_loss(monkeypatch) -> None:
     config = HSTUSpringModelConfig(
         item_size=32,
-        hidden_size=8,
+        hidden_size=4,
         num_attention_heads=2,
-        num_hidden_layers=2,
-        max_seq_len=16,
-        spring_attention_weight=0.7,
-        spring_emb_weight=0.3,
+        num_hidden_layers=1,
+        enable_ffn=True,
+        spring_attention_weight=0.6,
+        spring_ffn_weight=0.3,
+        spring_emb_weight=0.2,
     )
     model = HSTUSpringModel(config)
 
-    def mock_power_iteration(self, W, name="", eps=1e-12):  # noqa: D401
-        return torch.full((), 2.0, device=W.device, dtype=W.dtype)
+    power_values = {
+        "item_embed_weight": 2.0,
+        "attn_0_wo": 3.0,
+        "attn_0_head_0_wv": 1.5,
+        "attn_0_head_1_wv": 2.0,
+        "ffn_0_w1": 1.2,
+        "ffn_0_w2": 0.8,
+    }
+    attn_sn_iter = iter([4.0, 5.0])
 
-    def mock_attention_weight_spectral_norm(self, attn_weight, attention_mask):
-        return torch.full((), 3.0, device=attn_weight.device, dtype=attn_weight.dtype)
+    def fake_power_iteration(self, weight, name="", eps=1e-12):
+        value = power_values.get(name, 1.0)
+        return torch.tensor(value, device=weight.device, dtype=weight.dtype)
 
-    monkeypatch.setattr(HSTUSpringModel, "_power_iteration", mock_power_iteration)
-    monkeypatch.setattr(
-        HSTUSpringModel,
-        "_attention_weight_spectral_norm",
-        mock_attention_weight_spectral_norm,
-    )
+    def fake_attention_weight_spectral_norm(self, attn_weight, attention_mask):
+        value = next(attn_sn_iter)
+        return torch.tensor(value, device=attn_weight.device, dtype=attn_weight.dtype)
 
-    input_ids, attention_mask, timestamps = _dummy_inputs(config, batch_size=2, seq_len=3)
+    monkeypatch.setattr(HSTUSpringModel, "_power_iteration", fake_power_iteration)
+    monkeypatch.setattr(HSTUSpringModel, "_attention_weight_spectral_norm", fake_attention_weight_spectral_norm)
+
+    batch_size, seq_len = 2, 3
+    input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))
+    attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
+    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+
     output = model(
         input_ids=input_ids,
         attention_mask=attention_mask,
@@ -55,54 +60,187 @@ def test_hstu_spring_returns_weighted_model_loss(monkeypatch):
 
     device = output.model_loss.device
     dtype = output.model_loss.dtype
-    attn_inner = torch.tensor(config.num_attention_heads * 3.0 * 4.0, device=device, dtype=dtype)
-    attn_component = torch.sqrt(attn_inner) * torch.tensor(2.0, device=device, dtype=dtype)
-    per_layer_attention = torch.log1p(attn_component)
-    emb_component = torch.log1p(torch.tensor(2.0, device=device, dtype=dtype))
+
+    attn_sn = torch.tensor([4.0, 5.0], device=device, dtype=dtype)
+    wv_values = torch.tensor(
+        [power_values["attn_0_head_0_wv"], power_values["attn_0_head_1_wv"]],
+        device=device,
+        dtype=dtype,
+    )
+    attn_Av = (attn_sn * (wv_values**2)).sum()
+    spring_loss_attn = torch.log1p(
+        torch.sqrt(attn_Av) * torch.tensor(power_values["attn_0_wo"], device=device, dtype=dtype)
+    )
+
+    ffn_loss = torch.log1p(
+        torch.tensor(power_values["ffn_0_w1"], device=device, dtype=dtype)
+        * torch.tensor(power_values["ffn_0_w2"], device=device, dtype=dtype)
+    )
+    emb_loss = torch.log1p(torch.tensor(power_values["item_embed_weight"], device=device, dtype=dtype))
+
     expected_model_loss = (
-        config.spring_attention_weight * per_layer_attention + config.spring_emb_weight * emb_component
+        config.spring_attention_weight * spring_loss_attn
+        + config.spring_ffn_weight * ffn_loss
+        + config.spring_emb_weight * emb_loss
     )
 
     torch.testing.assert_close(output.model_loss, expected_model_loss)
 
 
-def test_hstu_spring_normalizes_embeddings_before_spectral_norm(monkeypatch):
+def test_hstu_spring_skips_model_loss_when_disabled() -> None:
+    config = HSTUSpringModelConfig(
+        item_size=16,
+        hidden_size=4,
+        num_attention_heads=2,
+        num_hidden_layers=1,
+    )
+    model = HSTUSpringModel(config)
+
+    batch_size, seq_len = 1, 3
+    input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))
+    attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
+    timestamps = torch.randint(0, 10, (batch_size, seq_len), dtype=torch.long)
+
+    output = model(input_ids=input_ids, attention_mask=attention_mask, timestamps=timestamps)
+
+    assert output.model_loss is None
+    assert output.last_hidden_state.shape == (batch_size, seq_len, config.hidden_size)
+
+
+def test_hstu_spring_forward_requires_timestamps() -> None:
     config = HSTUSpringModelConfig(
         item_size=8,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
-        norm_embeddings=True,
-        spring_attention_weight=0.0,
-        spring_ffn_weight=0.0,
-        spring_emb_weight=1.0,
     )
     model = HSTUSpringModel(config)
 
-    with torch.no_grad():
-        new_weight = torch.arange((config.item_size + 1) * config.hidden_size, dtype=torch.float32)
-        new_weight = new_weight.view(config.item_size + 1, config.hidden_size)
-        model._item_embed.weight.copy_(new_weight)
+    input_ids = torch.randint(1, config.item_size + 1, (1, 2))
+    attention_mask = torch.ones_like(input_ids)
 
-    captured_weight: dict[str, torch.Tensor] = {}
+    with pytest.raises(ValueError):
+        model(input_ids=input_ids, attention_mask=attention_mask, output_model_loss=True)
 
-    def spy_power_iteration(self, W, name="", eps=1e-12):  # noqa: D401
-        value = torch.ones((), device=W.device, dtype=W.dtype)
-        if name == "item_embed_weight":
-            captured_weight["normalized"] = W.detach().clone()
-        return value
 
-    def fake_attention_weight_spectral_norm(self, attn_weight, attention_mask):  # noqa: D401
-        return torch.ones((), device=attn_weight.device, dtype=attn_weight.dtype)
+def test_hstu_spring_handles_disabled_pos_emb_and_uses_rope() -> None:
+    config = HSTUSpringModelConfig(
+        item_size=20,
+        hidden_size=8,
+        num_attention_heads=2,
+        num_hidden_layers=1,
+        enable_input_pos_emb=False,
+        enable_learnable_rel_posemb=False,
+        enable_final_layernorm=True,
+    )
+    model = HSTUSpringModel(config)
 
-    monkeypatch.setattr(HSTUSpringModel, "_power_iteration", spy_power_iteration)
-    monkeypatch.setattr(
-        HSTUSpringModel,
-        "_attention_weight_spectral_norm",
-        fake_attention_weight_spectral_norm,
+    assert model.input_pos_emb is None
+    assert model.rotary_emb is not None
+    assert model.final_layernorm is not None
+
+    batch_size, seq_len = 2, 4
+    input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))
+    attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
+    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+
+    output = model(input_ids=input_ids, attention_mask=attention_mask, timestamps=timestamps)
+
+    assert output.model_loss is None
+    assert output.last_hidden_state.shape == (batch_size, seq_len, config.hidden_size)
+
+
+def test_hstu_spring_model_loss_without_ffn(monkeypatch) -> None:
+    config = HSTUSpringModelConfig(
+        item_size=12,
+        hidden_size=4,
+        num_attention_heads=2,
+        num_hidden_layers=1,
+        enable_ffn=False,
+        spring_attention_weight=0.5,
+        spring_ffn_weight=0.8,
+        spring_emb_weight=0.3,
+    )
+    model = HSTUSpringModel(config)
+
+    power_values = {
+        "item_embed_weight": 1.8,
+        "attn_0_wo": 2.2,
+        "attn_0_head_0_wv": 1.1,
+        "attn_0_head_1_wv": 0.9,
+    }
+    attn_sn_iter = iter([1.5, 1.2])
+
+    def fake_power_iteration(self, weight, name="", eps=1e-12):
+        return torch.tensor(power_values.get(name, 1.0), device=weight.device, dtype=weight.dtype)
+
+    def fake_attention_weight_spectral_norm(self, attn_weight, attention_mask):
+        return torch.tensor(next(attn_sn_iter), device=attn_weight.device, dtype=attn_weight.dtype)
+
+    monkeypatch.setattr(HSTUSpringModel, "_power_iteration", fake_power_iteration)
+    monkeypatch.setattr(HSTUSpringModel, "_attention_weight_spectral_norm", fake_attention_weight_spectral_norm)
+
+    input_ids = torch.randint(1, config.item_size + 1, (1, 3))
+    attention_mask = torch.ones(1, 3, dtype=torch.long)
+    timestamps = torch.arange(3, dtype=torch.long).unsqueeze(0)
+
+    output = model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        timestamps=timestamps,
+        output_model_loss=True,
+        output_hidden_states=False,
+        output_attentions=True,
     )
 
-    input_ids, attention_mask, timestamps = _dummy_inputs(config, batch_size=1, seq_len=3)
+    assert output.model_loss is not None
+    assert output.attentions is not None
+
+    device = output.model_loss.device
+    dtype = output.model_loss.dtype
+    attn_sn = torch.tensor([1.5, 1.2], device=device, dtype=dtype)
+    wv_values = torch.tensor(
+        [power_values["attn_0_head_0_wv"], power_values["attn_0_head_1_wv"]],
+        device=device,
+        dtype=dtype,
+    )
+    attn_Av = (attn_sn * (wv_values**2)).sum()
+    spring_loss_attn = torch.log1p(
+        torch.sqrt(attn_Av) * torch.tensor(power_values["attn_0_wo"], device=device, dtype=dtype)
+    )
+    emb_loss = torch.log1p(torch.tensor(power_values["item_embed_weight"], device=device, dtype=dtype))
+    expected_model_loss = config.spring_attention_weight * spring_loss_attn + config.spring_emb_weight * emb_loss
+
+    torch.testing.assert_close(output.model_loss, expected_model_loss)
+
+
+def test_hstu_spring_normalizes_embeddings_for_spring_loss(monkeypatch) -> None:
+    config = HSTUSpringModelConfig(
+        item_size=10,
+        hidden_size=4,
+        num_attention_heads=2,
+        num_hidden_layers=1,
+        norm_embeddings=True,
+    )
+    model = HSTUSpringModel(config)
+
+    captured = {}
+
+    def fake_power_iteration(self, weight, name="", eps=1e-12):
+        if name == "item_embed_weight":
+            captured["weight"] = weight.detach().clone()
+        return torch.ones((), device=weight.device, dtype=weight.dtype)
+
+    def fake_attention_weight_spectral_norm(self, attn_weight, attention_mask):
+        return torch.ones((), device=attn_weight.device, dtype=attn_weight.dtype)
+
+    monkeypatch.setattr(HSTUSpringModel, "_power_iteration", fake_power_iteration)
+    monkeypatch.setattr(HSTUSpringModel, "_attention_weight_spectral_norm", fake_attention_weight_spectral_norm)
+
+    input_ids = torch.randint(1, config.item_size + 1, (1, 3))
+    attention_mask = torch.ones(1, 3, dtype=torch.long)
+    timestamps = torch.arange(3, dtype=torch.long).unsqueeze(0)
+
     output = model(
         input_ids=input_ids,
         attention_mask=attention_mask,
@@ -111,59 +249,13 @@ def test_hstu_spring_normalizes_embeddings_before_spectral_norm(monkeypatch):
     )
 
     assert output.model_loss is not None
-    assert "normalized" in captured_weight
+    assert "weight" in captured
 
-    weight = captured_weight["normalized"]
-    row_norms = weight.norm(dim=-1)
-    nonzero_mask = row_norms > 0
-    torch.testing.assert_close(
-        row_norms[nonzero_mask],
-        torch.ones_like(row_norms[nonzero_mask]),
-        atol=1e-5,
-        rtol=1e-5,
-    )
+    expected = F.normalize(model.item_embed_weight, p=2, dim=-1)
+    torch.testing.assert_close(captured["weight"], expected)
 
 
-def test_hstu_spring_skips_model_loss_when_disabled():
-    config = HSTUSpringModelConfig(
-        item_size=16,
-        hidden_size=6,
-        num_attention_heads=2,
-        num_hidden_layers=1,
-    )
-    model = HSTUSpringModel(config)
-
-    input_ids, attention_mask, timestamps = _dummy_inputs(config, batch_size=1, seq_len=4)
-    output = model(input_ids=input_ids, attention_mask=attention_mask, timestamps=timestamps)
-
-    assert output.model_loss is None
-    assert output.last_hidden_state.shape == (1, 4, config.hidden_size)
-
-
-def test_hstu_spring_requires_timestamps_argument():
-    config = HSTUSpringModelConfig(item_size=8, hidden_size=6, num_attention_heads=2, num_hidden_layers=1)
-    model = HSTUSpringModel(config)
-
-    input_ids, attention_mask, _ = _dummy_inputs(config, batch_size=1, seq_len=3)
-
-    with pytest.raises(ValueError):
-        model(input_ids=input_ids, attention_mask=attention_mask)
-
-
-def test_hstu_spring_respects_final_layer_norm_flag():
-    base_kwargs = dict(item_size=8, hidden_size=6, num_attention_heads=2, num_hidden_layers=1)
-
-    config_ln = HSTUSpringModelConfig(final_layer_norm=True, **base_kwargs)
-    model_ln = HSTUSpringModel(config_ln)
-    assert isinstance(model_ln.final_layer_norm, torch.nn.Module)
-    assert model_ln.final_layer_norm.__class__.__name__ == "RMSNorm"
-
-    config_id = HSTUSpringModelConfig(final_layer_norm=False, **base_kwargs)
-    model_id = HSTUSpringModel(config_id)
-    assert isinstance(model_id.final_layer_norm, torch.nn.Identity)
-
-
-def test_hstu_spring_power_iteration_registers_and_updates_buffers():
+def test_hstu_spring_power_iteration_registers_and_updates_buffers() -> None:
     config = HSTUSpringModelConfig(
         item_size=8,
         hidden_size=4,
@@ -193,7 +285,7 @@ def test_hstu_spring_power_iteration_registers_and_updates_buffers():
     assert torch.isfinite(sigma_third)
 
 
-def test_hstu_spring_attention_weight_spectral_norm_masks_padding():
+def test_hstu_spring_attention_weight_spectral_norm_masks_padding() -> None:
     config = HSTUSpringModelConfig(
         item_size=8,
         hidden_size=4,
@@ -221,53 +313,7 @@ def test_hstu_spring_attention_weight_spectral_norm_masks_padding():
     mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool().squeeze(1)
     masked_attn = attn_weight.masked_fill(mask, 0.0)
     query_sums = masked_attn.sum(dim=-2).flatten()
-    mask_flat = attention_mask.bool().flatten()
-    masked_query = query_sums[mask_flat]
-    expected = torch.logsumexp(masked_query * tau, dim=0) / tau
+    masked = query_sums[attention_mask.bool().flatten()]
+    expected = torch.logsumexp(masked * tau, dim=0) / tau
 
     torch.testing.assert_close(result, expected)
-
-
-def test_hstu_spring_adds_ffn_regularization_when_enabled(monkeypatch):
-    config = HSTUSpringModelConfig(
-        item_size=8,
-        hidden_size=8,
-        num_attention_heads=2,
-        num_hidden_layers=1,
-        max_seq_len=8,
-        add_ffn=True,
-        spring_attention_weight=0.0,
-        spring_emb_weight=0.0,
-        spring_ffn_weight=1.25,
-    )
-    model = HSTUSpringModel(config)
-
-    def fake_power_iteration(self, W, name="", eps=1e-12):  # noqa: D401
-        if "ffn_0_w1" in name:
-            value = 2.0
-        elif "ffn_0_w2" in name:
-            value = 3.0
-        else:
-            value = 0.0
-        return torch.full((), value, device=W.device, dtype=W.dtype)
-
-    def fake_attention_weight_spectral_norm(self, attn_weight, attention_mask):  # noqa: D401
-        return torch.zeros((), device=attn_weight.device, dtype=attn_weight.dtype)
-
-    monkeypatch.setattr(HSTUSpringModel, "_power_iteration", fake_power_iteration)
-    monkeypatch.setattr(HSTUSpringModel, "_attention_weight_spectral_norm", fake_attention_weight_spectral_norm)
-
-    input_ids, attention_mask, timestamps = _dummy_inputs(config, batch_size=1, seq_len=4)
-    output = model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        timestamps=timestamps,
-        output_model_loss=True,
-    )
-
-    assert output.model_loss is not None
-    expected = (
-        torch.log1p(torch.tensor(6.0, device=output.model_loss.device, dtype=output.model_loss.dtype))
-        * config.spring_ffn_weight
-    )
-    torch.testing.assert_close(output.model_loss, expected)

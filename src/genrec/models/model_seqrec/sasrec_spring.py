@@ -135,6 +135,7 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         Returns:
             SASRecSpringModelOutput: Model outputs packaged as a `SASRecSpringModelOutput` descendant.
         """
+        d, H = self.config.hidden_size, self.config.num_attention_heads
 
         hidden_states: Float[torch.Tensor, "B L d"]
         hidden_states = self.embed_tokens(input_ids)
@@ -145,11 +146,6 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         position_embeddings: Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]
         position_embeddings = self.rotary_emb(hidden_states)
 
-        all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
-        all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
-
-        d, H = self.config.hidden_size, self.config.num_attention_heads
-
         # Spring regularizations
         spring_loss_emb = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
         spring_loss_attn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
@@ -159,6 +155,9 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         if output_model_loss:
             item_emb_sn = self._power_iteration(self.item_embed_weight, name="item_embed_weight")
             spring_loss_emb = item_emb_sn.log1p()
+
+        all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
+        all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
 
         for layer_idx, layer in enumerate(self.layers):
             if output_hidden_states:

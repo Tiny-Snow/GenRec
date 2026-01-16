@@ -7,8 +7,45 @@ import torch
 import torch.nn as nn
 
 __all__ = [
+    "FeedForwardNetwork",
     "SwiGLU",
 ]
+
+
+class FeedForwardNetwork(nn.Module):
+    """Simple two-layer Feed-Forward Network with GELU activation."""
+
+    def __init__(
+        self,
+        hidden_size: int,
+        intermediate_size: int,
+        ffn_bias: bool = False,
+    ) -> None:
+        """Initializes FeedForwardNetwork module.
+
+        Args:
+            hidden_size (int): Dimensionality of the input and output.
+            intermediate_size (int): Dimensionality of the intermediate layer.
+            ffn_bias (bool): Whether to include bias terms in the linear projections. Default is False.
+        """
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.intermediate_size = intermediate_size
+
+        self.fc1 = nn.Linear(hidden_size, intermediate_size, bias=ffn_bias)
+        self.fc2 = nn.Linear(intermediate_size, hidden_size, bias=ffn_bias)
+        self.act_fn = nn.functional.gelu
+
+    def forward(self, x: Float[torch.Tensor, "... d"]) -> Float[torch.Tensor, "... d"]:
+        """Forward pass for FeedForwardNetwork.
+
+        Args:
+            x (Float[torch.Tensor, "... d"]): Input tensor of shape (..., hidden_size).
+
+        Returns:
+            Float[torch.Tensor, "... d"]: Output tensor of shape (..., hidden_size).
+        """
+        return self.fc2(self.act_fn(self.fc1(x)))
 
 
 class SwiGLU(nn.Module):
