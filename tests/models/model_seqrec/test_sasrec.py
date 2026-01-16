@@ -11,6 +11,7 @@ def test_sasrec_forward_output_shapes() -> None:
         num_hidden_layers=2,
     )
     model = SASRecModel(config)
+    assert model.item_size == config.item_size
 
     batch_size, seq_len = 2, 5
     input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))

@@ -13,6 +13,7 @@ from transformers import EvalPrediction
 
 from genrec.models.model_seqrec.base import SeqRecModelConfig
 from genrec.trainers.trainer_seqrec.base import compute_seqrec_metrics
+from genrec.trainers.utils.evaluations import clip_top_k
 from genrec.trainers.utils.callbacks import EpochIntervalEvalCallback
 from tests.trainers.trainer_seqrec.helpers import (
     DummySeqRecCollator,
@@ -43,7 +44,10 @@ def test_seqrec_trainer_initializes_defaults(tmp_path: Path) -> None:
     assert isinstance(trainer.compute_metrics, partial)
     assert trainer.compute_metrics.func is compute_seqrec_metrics
     assert trainer.compute_metrics.keywords["metrics"] == args.metrics
-    assert trainer.compute_metrics.keywords["top_k"] == args.top_k
+    expected_top_k = tuple(clip_top_k(args.top_k, dataset.item_size))
+    assert trainer.compute_metrics.keywords["top_k"] == expected_top_k
+    assert trainer.top_k == expected_top_k
+    assert trainer.max_top_k == max(expected_top_k)
 
     callback_types = tuple(type(cb) for cb in trainer.callback_handler.callbacks)
     assert any(isinstance(cb, EpochIntervalEvalCallback) for cb in trainer.callback_handler.callbacks), callback_types
@@ -75,21 +79,21 @@ def test_seqrec_trainer_respects_custom_metrics_and_callbacks(tmp_path: Path) ->
 
 
 def test_compute_seqrec_metrics_returns_registered_metrics() -> None:
-    logits = np.array(
+    topk_indices = np.array(
         [
-            [0.2, 0.8, 0.1],
-            [0.9, 0.05, 0.6],
+            [0, 1],
+            [2, 1],
         ],
-        dtype=np.float32,
+        dtype=np.int64,
     )
     labels = np.array([[0, 1], [1, 2]], dtype=np.int64)
-    prediction = EvalPrediction(predictions=logits, label_ids=labels)
+    prediction = EvalPrediction(predictions=topk_indices, label_ids=labels)
 
     class TinyTrainDataset:
         def __init__(self, vocab_size: int) -> None:
             self.item_popularity = np.ones(vocab_size + 1, dtype=np.int64)
 
-    train_dataset = TinyTrainDataset(vocab_size=logits.shape[1] - 1)
+    train_dataset = TinyTrainDataset(vocab_size=int(topk_indices.max()))
     metrics = compute_seqrec_metrics(
         prediction,
         train_dataset=train_dataset,
@@ -137,7 +141,14 @@ def test_seqrec_trainer_compute_loss_with_model_loss_and_outputs(
     expected_loss = 1.5 + 2.0 * args.model_loss_weight
     torch.testing.assert_close(loss, torch.tensor(expected_loss))
     torch.testing.assert_close(output_dict["loss"], loss)
-    assert output_dict["logits"].shape == (len(batch), model.config.item_size + 1)
+    assert "topk_indices" in output_dict
+    assert output_dict["topk_indices"].shape == (len(batch), trainer.max_top_k)
+    forward_outputs = trainer.model(**inputs)
+    last_hidden = forward_outputs.last_hidden_state[:, -1, :]
+    item_embed_weight = trainer.model.item_embed_weight
+    expected_logits = last_hidden @ item_embed_weight.T
+    _, expected_topk = torch.topk(expected_logits[:, 1:], k=trainer.max_top_k, dim=1)
+    torch.testing.assert_close(output_dict["topk_indices"], expected_topk)
     assert torch.equal(trainer.last_seen_num_items, num_items_in_batch)
 
 
@@ -210,10 +221,8 @@ def test_seqrec_trainer_compute_loss_without_model_loss_returns_outputs(
 
     loss, outputs = trainer.compute_loss(trainer.model, inputs, return_outputs=True)
     torch.testing.assert_close(loss, torch.tensor(0.6))
-    assert "logits" in outputs and outputs["logits"].shape == (
-        len(batch),
-        model.config.item_size + 1,
-    )
+    assert "topk_indices" in outputs
+    assert outputs["topk_indices"].shape == (len(batch), trainer.max_top_k)
 
 
 def test_seqrec_trainer_normalizes_logits_when_enabled(tmp_path: Path) -> None:
@@ -238,8 +247,10 @@ def test_seqrec_trainer_normalizes_logits_when_enabled(tmp_path: Path) -> None:
     last_hidden = forward_outputs.last_hidden_state[:, -1, :]
     item_embed_weight = trainer.model.item_embed_weight
     expected_logits = F.normalize(last_hidden, p=2, dim=-1) @ F.normalize(item_embed_weight, p=2, dim=-1).T
+    expected_logits = expected_logits[:, 1:]  # exclude padding token logits
 
-    torch.testing.assert_close(output_dict["logits"], expected_logits)
+    _, expected_topk = torch.topk(expected_logits, k=trainer.max_top_k, dim=1)
+    torch.testing.assert_close(output_dict["topk_indices"], expected_topk)
 
 
 def test_seqrec_trainer_predict_returns_metrics(tmp_path: Path) -> None:
@@ -255,8 +266,13 @@ def test_seqrec_trainer_predict_returns_metrics(tmp_path: Path) -> None:
     )
 
     prediction_output = trainer.predict(dataset)
-    expected_shape = (len(dataset), model.config.item_size + 1)
+    expected_shape = (len(dataset), trainer.max_top_k)
     assert prediction_output.predictions.shape == expected_shape
     assert prediction_output.label_ids.shape == (len(dataset), dataset.seq_len)
     assert "test_hr@1" in prediction_output.metrics
     assert 0.0 <= prediction_output.metrics["test_hr@1"] <= 1.0
+
+
+def test_sanitize_top_k_clamps_values_exceeding_item_size() -> None:
+    result = clip_top_k((1, 5, 10, 50, 50), item_size=10)
+    assert result == (1, 5, 10)

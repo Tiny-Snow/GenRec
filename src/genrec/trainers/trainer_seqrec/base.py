@@ -17,7 +17,7 @@ from transformers import EvalPrediction, Trainer, TrainerCallback, TrainingArgum
 from ...datasets import SeqRecCollator, SeqRecDataset
 from ...models import SeqRecModel, SeqRecOutput
 from ..utils.callbacks import EpochIntervalEvalCallback
-from ..utils.evaluations import MetricFactory
+from ..utils.evaluations import MetricFactory, clip_top_k
 
 __all__ = [
     "compute_seqrec_metrics",
@@ -181,12 +181,12 @@ def compute_seqrec_metrics(
         ("unpopularity", {"p": (0.2, 0.4)}),
     ),
     device: Union[torch.device, str, None] = None,
-    batch_size: int = 4096,
 ) -> Dict[str, float]:
     """Compute metrics for sequential recommendation tasks.
 
     Args:
-        prediction (EvalPrediction): Object containing model predictions and labels.
+        prediction (EvalPrediction): Object containing model predictions and labels. Predictions are
+            expected to be the precomputed top-k item indices per user (shape: ``[num_users, max_k]``).
         train_dataset (SeqRecDataset): Dataset used during training; required for global metrics
             such as popularity-based measurements.
         top_k (Sequence[int]): Cutoff values for computing top-K metrics, determining how many
@@ -197,8 +197,6 @@ def compute_seqrec_metrics(
             ('unpopularity', {'p': (0.2, 0.4)})].
         device (Union[torch.device, str, None]): Device used for metric computations.
             If None, defaults to CPU. Default is None.
-        batch_size (int): Number of samples per chunk when transferring logits/labels to the
-            target device for top-K extraction. Default is 4096.
 
     Returns:
         Dict[str, float]: Dictionary containing computed metric values keyed by metric name.
@@ -209,44 +207,30 @@ def compute_seqrec_metrics(
         In addition, `batch_eval_metrics` in `SeqRecTrainingArguments` should be set to `False`
         to avoid conflicts.
     """
-    logits: Float[np.ndarray, "B I+1"]
+    torch_device = torch.device(device) if device is not None else torch.device("cpu")
+
+    topk_indices: Int[torch.Tensor, "B K"]
     if isinstance(prediction.predictions, tuple):  # pragma: no cover - rarely used
-        logits = prediction.predictions[0].astype(np.float32)
+        topk_indices = torch.as_tensor(prediction.predictions[0], dtype=torch.long, device=torch_device)
     else:
-        logits = prediction.predictions.astype(np.float32)
+        topk_indices = torch.as_tensor(prediction.predictions, dtype=torch.long, device=torch_device)
 
     labels: Int[np.ndarray, "B L"]
     if isinstance(prediction.label_ids, tuple):  # pragma: no cover - rarely used
         labels = prediction.label_ids[0].astype(np.int64)
     else:
         labels = prediction.label_ids.astype(np.int64)
-    last_step_labels: Int[np.ndarray, "B"] = labels[:, -1]
-
-    num_items = logits.shape[1]
-    max_k = min(max(top_k), num_items)
-    torch_device = torch.device(device) if device is not None else torch.device("cpu")
-
-    topk_chunks: List[Int[torch.Tensor, "b max_k"]] = []
-    label_chunks: List[Int[torch.Tensor, "b"]] = []
-    for start in range(0, logits.shape[0], batch_size):
-        end = min(start + batch_size, logits.shape[0])
-        logits_chunk = torch.from_numpy(logits[start:end]).to(torch_device)
-        labels_chunk = torch.from_numpy(last_step_labels[start:end]).to(torch_device)
-        _, indices = torch.topk(logits_chunk, k=max_k, dim=1)
-        topk_chunks.append(indices)
-        label_chunks.append(labels_chunk)
-
-    topk_tensor = torch.cat(topk_chunks, dim=0)
-    labels_tensor = torch.cat(label_chunks, dim=0)
+    last_step_labels: Int[torch.Tensor, "B"]
+    last_step_labels = torch.as_tensor(labels[:, -1], dtype=torch.long, device=torch_device)
 
     results: Dict[str, float] = {}
     for k in top_k:
-        sliced_topk_indices = topk_tensor[:, :k]
+        sliced_topk_indices = topk_indices[:, :k]
         for metric_name, metric_params in metrics:
             metric_fn = MetricFactory.create(metric_name)
             metric_results = metric_fn(
                 topk_indices=sliced_topk_indices,
-                labels=labels_tensor,
+                labels=last_step_labels,
                 train_dataset=train_dataset,
                 **metric_params,
             )
@@ -298,23 +282,23 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
                 `EpochIntervalEvalCallback`).
             **kwargs (Any): Additional keyword arguments forwarded to the base `Trainer`.
         """
+        self.item_size = train_dataset.item_size
+        self.top_k = tuple(clip_top_k(args.top_k, self.item_size))
+        self.max_top_k = max(self.top_k)
+
         try:
             first_param = next(model.parameters())
             model_device = first_param.device
         except StopIteration:  # pragma: no cover - models without parameters
             model_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        eval_batch_size = getattr(args, "per_device_eval_batch_size", None)
-        metric_batch_size = eval_batch_size * 4 if eval_batch_size else 4096
-
         if compute_metrics is None:
             compute_metrics = partial(
                 compute_seqrec_metrics,
                 train_dataset=train_dataset,
-                top_k=args.top_k,
+                top_k=self.top_k,
                 metrics=args.metrics,
                 device=model_device,
-                batch_size=metric_batch_size,
             )
 
         if callbacks is None:
@@ -338,8 +322,6 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         # You may override this attribute if your label key is different in subclasses.
         self.label_names = ["labels"]
 
-        self.item_size = train_dataset.item_size
-
     def compute_loss(
         self,
         model: nn.Module,
@@ -360,8 +342,9 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         Returns:
             Union[Float[torch.Tensor, ""], Tuple[Float[torch.Tensor, ""], Dict[str, torch.Tensor]]]:
                 Either the scalar loss or a tuple containing the loss and a dictionary with
-                loss/logits when `return_outputs` is True. The loss combines the model-specific
-                loss (if provided) with the recommendation loss computed via `compute_rec_loss`.
+                loss and top-k indices of predicted items when `return_outputs` is True. The loss
+                combines the model-specific loss (if provided) with the recommendation loss computed
+                via `compute_rec_loss`.
         """
         model = model.module if hasattr(model, "module") else model  # type: ignore - for distributed training
         assert isinstance(model, SeqRecModel), "Model must be an instance of SeqRecModel."
@@ -387,12 +370,15 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
                 last_step_hidden_states = F.normalize(last_step_hidden_states, p=2, dim=-1)
                 item_embed_weight = F.normalize(item_embed_weight, p=2, dim=-1)
 
-            logits: Float[torch.Tensor, "B I+1"]
-            logits = last_step_hidden_states @ item_embed_weight.T
+            logits: Float[torch.Tensor, "B I"]
+            logits = (last_step_hidden_states @ item_embed_weight.T)[:, 1:]  # exclude padding index 0
+
+            effective_top_k = max(1, min(self.max_top_k, self.item_size))
+            _, topk_indices = torch.topk(logits, k=effective_top_k, dim=1)
 
             output_dict: Dict[str, torch.Tensor] = {
                 "loss": loss,
-                "logits": logits,
+                "topk_indices": topk_indices.detach(),
             }
             return loss, output_dict
         else:

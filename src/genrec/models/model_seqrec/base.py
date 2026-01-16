@@ -191,6 +191,7 @@ class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], A
             config (_SeqRecModelConfig): Configuration containing model hyperparameters.
         """
         super().__init__(config)
+        self.config: _SeqRecModelConfig
         self._item_embed = nn.Embedding(config.item_size + 1, config.hidden_size, padding_idx=0)
 
     def embed_tokens(
@@ -215,6 +216,11 @@ class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], A
             Float[torch.Tensor, "I+1 d"]: Item embedding weight matrix of shape (item_size + 1, hidden_size).
         """
         return self._item_embed.weight
+
+    @property
+    def item_size(self) -> int:
+        """Returns the size of the item vocabulary (excluding padding token)."""
+        return self.config.item_size
 
     def _set_gradient_checkpointing(
         self,

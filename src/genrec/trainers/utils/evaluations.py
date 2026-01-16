@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Protocol, Sequence
+from typing import Any, Callable, Dict, Protocol, Sequence, Tuple
 
 import torch
 from jaxtyping import Int
@@ -14,9 +14,16 @@ __all__ = [
     "calc_metric_ndcg",
     "calc_metric_popularity",
     "calc_metric_unpopularity",
+    "clip_top_k",
     "MetricFactory",
     "MetricFn",
 ]
+
+
+def clip_top_k(top_k: Sequence[int], item_size: int) -> Tuple[int, ...]:
+    """Clamp sorted ``top_k`` cutoffs to ``item_size``, sort and remove duplicates if any."""
+    top_k_set = set([min(k, item_size) for k in top_k])
+    return tuple(sorted(top_k_set))
 
 
 class MetricFn(Protocol):  # pragma: no cover - protocol
