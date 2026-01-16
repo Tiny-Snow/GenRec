@@ -56,7 +56,7 @@ trainer:
         per_device_eval_batch_size: 1024
         gradient_accumulation_steps: 1  # batch_size = per_device_train_batch_size * num_devices * gradient_accumulation_steps
         learning_rate: 1.0e-3
-        weight_decay: 1.0
+        weight_decay: 0.1
         max_grad_norm: 1.0
         optim: adamw_torch
         lr_scheduler_type: linear
