@@ -143,3 +143,32 @@ def test_sasrec_spring_attention_weight_spectral_norm_masks_padding():
     expected = torch.logsumexp(masked * tau, dim=0) / tau
 
     torch.testing.assert_close(result, expected)
+
+
+def test_sasrec_spring_uses_gradient_checkpointing(monkeypatch):
+    config = SASRecSpringModelConfig(
+        item_size=12,
+        hidden_size=4,
+        num_attention_heads=2,
+        num_hidden_layers=2,
+    )
+    model = SASRecSpringModel(config)
+    model.gradient_checkpointing_enable()
+    model.train()
+
+    calls = []
+
+    def fake_checkpoint(function, *args, **kwargs):
+        calls.append(kwargs)
+        return function(*args)
+
+    monkeypatch.setattr("genrec.models.model_seqrec.sasrec_spring.checkpoint", fake_checkpoint)
+
+    batch_size, seq_len = 1, 3
+    input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))
+    attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
+
+    model(input_ids=input_ids, attention_mask=attention_mask)
+
+    assert len(calls) == config.num_hidden_layers
+    assert all(call.get("use_reentrant") is False for call in calls)

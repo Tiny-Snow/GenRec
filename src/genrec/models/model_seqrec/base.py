@@ -182,6 +182,7 @@ class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], A
     """
 
     config_class: Type[_SeqRecModelConfig]
+    supports_gradient_checkpointing = True
 
     def __init__(self, config: _SeqRecModelConfig) -> None:
         """Initializes the sequential recommendation model.
@@ -214,6 +215,17 @@ class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], A
             Float[torch.Tensor, "I+1 d"]: Item embedding weight matrix of shape (item_size + 1, hidden_size).
         """
         return self._item_embed.weight
+
+    def _set_gradient_checkpointing(
+        self,
+        enable: bool = True,
+        gradient_checkpointing_func: Optional[Callable[..., torch.Tensor]] = None,
+    ) -> None:
+        """Hooks into HF's gradient checkpointing toggles by tracking the enable flag."""
+
+        self.gradient_checkpointing = enable
+        if gradient_checkpointing_func is not None:
+            self._gradient_checkpointing_func = gradient_checkpointing_func  # pragma: no cover - optional hook
 
     @abstractmethod
     def forward(  # pragma: no cover - abstract method

@@ -317,3 +317,33 @@ def test_hstu_spring_attention_weight_spectral_norm_masks_padding() -> None:
     expected = torch.logsumexp(masked * tau, dim=0) / tau
 
     torch.testing.assert_close(result, expected)
+
+
+def test_hstu_spring_uses_gradient_checkpointing(monkeypatch) -> None:
+    config = HSTUSpringModelConfig(
+        item_size=14,
+        hidden_size=6,
+        num_attention_heads=2,
+        num_hidden_layers=2,
+    )
+    model = HSTUSpringModel(config)
+    model.gradient_checkpointing_enable()
+    model.train()
+
+    calls = []
+
+    def fake_checkpoint(function, *args, **kwargs):
+        calls.append(kwargs)
+        return function(*args)
+
+    monkeypatch.setattr("genrec.models.model_seqrec.hstu_spring.checkpoint", fake_checkpoint)
+
+    batch_size, seq_len = 1, 3
+    input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))
+    attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
+    timestamps = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, -1)
+
+    model(input_ids=input_ids, attention_mask=attention_mask, timestamps=timestamps)
+
+    assert len(calls) == config.num_hidden_layers
+    assert all(call.get("use_reentrant") is False for call in calls)

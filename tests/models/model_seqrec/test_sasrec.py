@@ -53,3 +53,33 @@ def test_sasrec_returns_optional_collections_when_requested() -> None:
     assert len(output.attentions) == config.num_hidden_layers
     for attn in output.attentions:
         assert attn.shape == (batch_size, config.num_attention_heads, seq_len, seq_len)
+
+
+def test_sasrec_uses_gradient_checkpointing(monkeypatch) -> None:
+    config = SASRecModelConfig(
+        item_size=8,
+        hidden_size=4,
+        num_attention_heads=2,
+        num_hidden_layers=2,
+    )
+    model = SASRecModel(config)
+    model.gradient_checkpointing_enable()
+    model.train()
+
+    calls = []
+
+    def fake_checkpoint(function, *args, **kwargs):
+        calls.append(kwargs)
+        return function(*args)
+
+    monkeypatch.setattr("genrec.models.model_seqrec.sasrec.checkpoint", fake_checkpoint)
+
+    batch_size, seq_len = 1, 3
+    input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))
+    attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
+
+    output = model(input_ids=input_ids, attention_mask=attention_mask)
+
+    assert output.last_hidden_state.shape == (batch_size, seq_len, config.hidden_size)
+    assert len(calls) == config.num_hidden_layers
+    assert all(call.get("use_reentrant") is False for call in calls)
