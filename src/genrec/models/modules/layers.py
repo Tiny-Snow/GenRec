@@ -40,6 +40,7 @@ class LlamaDecoder2HSTULayer(nn.Module):
         attention_bias: bool = False,
         ffn_bias: bool = False,
         attention_type: str = "softmax",
+        activation_type: str = "silu",  # 新增
         add_ffn: bool = True,
     ) -> None:
         """Initializes StandardDecoderLayer module.
@@ -65,6 +66,7 @@ class LlamaDecoder2HSTULayer(nn.Module):
         self.attention_bias = attention_bias
         self.ffn_bias = ffn_bias
         self.attention_type = attention_type
+        self.activation_type = activation_type
         self.add_ffn = add_ffn
 
         if self.attention_type == "softmax":
@@ -83,6 +85,7 @@ class LlamaDecoder2HSTULayer(nn.Module):
                 attention_dropout=attention_dropout,
                 attention_bias=attention_bias,
                 attention_norm=False,
+                activation_type=self.activation_type,
             )
         elif self.attention_type == "silu_norm":
             self.self_attn = MaskedSelfAttentionWithRoPEAndSiLUActivation(

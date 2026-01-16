@@ -37,6 +37,8 @@ class SASRec2HSTUSpringModelConfig(SASRecModelConfig):
         learnable_input_pos_emb: bool = False,
         linear_dropout: float = 0.0,
         attention_type: str = "softmax",
+        activation_type: str = "silu",
+        abs_attention_weights: bool = False,
         spring_attention_weight: float = 1.0,
         spring_ffn_weight: float = 0.001,
         spring_emb_weight: float = 0.1,
@@ -56,6 +58,10 @@ class SASRec2HSTUSpringModelConfig(SASRecModelConfig):
                 Default is 0.0.
             attention_type (str): Type of attention normalization to use ("softmax", "silu", "silu_norm").
                 Default is "softmax".
+            activation_type (str): Activation function to use in the model ("silu", "relu", "gelu").
+                Default is "silu".
+            abs_attention_weights (bool): Whether to use absolute values of attention weights
+                for regularization. Default is False.
             spring_attention_weight (float): Weight for the Spring regularization on
                 attention module. Default is 1.0.
             spring_ffn_weight (float): Weight for the Spring regularization on feed-forward
@@ -75,6 +81,8 @@ class SASRec2HSTUSpringModelConfig(SASRecModelConfig):
         self.learnable_input_pos_emb = learnable_input_pos_emb
         self.linear_dropout = linear_dropout
         self.attention_type = attention_type
+        self.activation_type = activation_type
+        self.abs_attention_weights = abs_attention_weights
         self.spring_attention_weight = spring_attention_weight
         self.spring_ffn_weight = spring_ffn_weight
         self.spring_emb_weight = spring_emb_weight
@@ -138,6 +146,7 @@ class SASRec2HSTUSpringModel(SeqRecModel[SASRec2HSTUSpringModelConfig, SASRec2HS
                     attention_bias=config.attention_bias,
                     ffn_bias=config.ffn_bias,
                     attention_type=config.attention_type,
+                    activation_type=config.activation_type,
                     add_ffn=config.add_ffn,
                 )
                 for _ in range(config.num_hidden_layers)
@@ -343,6 +352,10 @@ class SASRec2HSTUSpringModel(SeqRecModel[SASRec2HSTUSpringModelConfig, SASRec2HS
         # remask the attention weights to fix non-zero values at all-masked positions
         causal_mask: Bool[torch.Tensor, "B 1 L L"]
         causal_mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
+        # Optionally take absolute value before computing column/row sums, to avoid
+        # cancellation when attn_weights contain negative values (e.g., when using SiLU).
+        if getattr(self.config, "abs_attention_weights", False):
+            attn_weight = attn_weight.abs()
         attn_weight = attn_weight.masked_fill(causal_mask.squeeze(1), 0.0)
 
         query_sums: Float[torch.Tensor, "B*L"] = attn_weight.sum(dim=-2).flatten()

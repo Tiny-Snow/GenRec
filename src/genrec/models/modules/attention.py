@@ -137,6 +137,7 @@ class MaskedSelfAttentionWithRoPEAndSiLUActivation(nn.Module):
         attention_dropout: float = 0.0,
         attention_bias: bool = False,
         attention_norm: bool = False,
+        activation_type: str = "silu",  # 新增
     ) -> None:
         """Initializes SelfAttention module.
 
@@ -147,6 +148,7 @@ class MaskedSelfAttentionWithRoPEAndSiLUActivation(nn.Module):
             attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
             attention_bias (bool): Whether to include bias terms in the attention projections. Default is False.
             attention_norm (bool): Whether to apply row-wise normalization on attention weights. Default is False.
+            activation_type (str): Activation function type. Can be "silu" or "softplus". Default is "silu".
         """
         super().__init__()
         self.hidden_size = hidden_size
@@ -155,6 +157,7 @@ class MaskedSelfAttentionWithRoPEAndSiLUActivation(nn.Module):
         self.attention_dropout = attention_dropout
         self.attention_bias = attention_bias
         self.attention_norm = attention_norm
+        self.activation_type = activation_type  # 新增
 
         self.q_proj = nn.Linear(hidden_size, num_heads * head_dim, bias=attention_bias)
         self.k_proj = nn.Linear(hidden_size, num_heads * head_dim, bias=attention_bias)
@@ -207,7 +210,13 @@ class MaskedSelfAttentionWithRoPEAndSiLUActivation(nn.Module):
         if attention_mask is not None:
             attn_weights = attn_weights + attention_mask  # -inf -> 0 after addition
 
-        attn_weights = F.silu(attn_weights) / seq_len
+        if self.activation_type == "silu":
+            attn_weights = F.silu(attn_weights) / seq_len
+        elif self.activation_type == "softplus":
+            attn_weights = F.softplus(attn_weights) / seq_len
+        else:
+            raise ValueError(f"Unsupported activation_type: {self.activation_type}")
+
         if self.attention_norm:
             attn_weights = attn_weights / (attn_weights.sum(dim=-1, keepdim=True) + 1e-8)
 
