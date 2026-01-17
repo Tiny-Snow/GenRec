@@ -1,5 +1,7 @@
 import torch
 
+import genrec.models.model_seqrec.sasrec_spring as sasrec_spring
+import genrec.models.modules.layers as layers_mod
 from genrec.models.model_seqrec.sasrec_spring import SASRecSpringModel, SASRecSpringModelConfig
 from genrec.models.modules.utils import create_attention_mask
 
@@ -16,16 +18,16 @@ def test_sasrec_spring_returns_weighted_model_loss(monkeypatch):
     )
     model = SASRecSpringModel(config)
 
-    def mock_power_iteration(self, W, name="", eps=1e-12):
+    def mock_power_iteration(module, W, name="", spectral_norm_iters=1, eps=1e-12):
         return torch.full((), 2.0, device=W.device, dtype=W.dtype)
 
-    def mock_attention_weight_spectral_norm(self, attn_weight, attention_mask):
+    def mock_attention_weight_spectral_norm(attn_weight, tau, padding_mask=None):
         return torch.full((), 3.0, device=attn_weight.device, dtype=attn_weight.dtype)
 
-    monkeypatch.setattr(SASRecSpringModel, "_power_iteration", mock_power_iteration)
+    monkeypatch.setattr(sasrec_spring, "spring_power_iteration", mock_power_iteration)
     monkeypatch.setattr(
-        SASRecSpringModel,
-        "_attention_weight_spectral_norm",
+        layers_mod,
+        "spring_attention_weight_spectral_norm",
         mock_attention_weight_spectral_norm,
     )
 
@@ -93,20 +95,34 @@ def test_sasrec_spring_power_iteration_registers_and_updates_buffers():
     torch.manual_seed(0)
     weight_first = torch.randn(3, 3, dtype=torch.float32)
     sigma_first_expected = torch.linalg.svdvals(weight_first)[0]
-    sigma_first = model._power_iteration(weight_first, name="probe")
+    sigma_first = layers_mod.spring_power_iteration(
+        model,
+        weight_first,
+        name="probe",
+        spectral_norm_iters=config.spectral_norm_iters,
+    )
     torch.testing.assert_close(sigma_first, sigma_first_expected, atol=1e-4, rtol=1e-4)
     assert hasattr(model, "probe_u") and hasattr(model, "probe_v")
     first_u = model.probe_u.clone()
 
     weight_second = torch.randn(3, 3, dtype=torch.float32)
     sigma_second_expected = torch.linalg.svdvals(weight_second)[0]
-    sigma_second = model._power_iteration(weight_second, name="probe")
+    sigma_second = layers_mod.spring_power_iteration(
+        model,
+        weight_second,
+        name="probe",
+        spectral_norm_iters=config.spectral_norm_iters,
+    )
     torch.testing.assert_close(sigma_second, sigma_second_expected, atol=1e-4, rtol=1e-4)
     assert not torch.allclose(model.probe_u, first_u)
 
     # calling without a name should not create persistent buffers
     weight_third = torch.tensor([[2.0, 1.0], [1.0, 2.0]], dtype=torch.float32)
-    sigma_third = model._power_iteration(weight_third)
+    sigma_third = layers_mod.spring_power_iteration(
+        model,
+        weight_third,
+        spectral_norm_iters=config.spectral_norm_iters,
+    )
     assert not hasattr(model, "_u")
     assert torch.isfinite(sigma_third)
 
@@ -133,7 +149,11 @@ def test_sasrec_spring_attention_weight_spectral_norm_masks_padding():
     )
     attention_mask = torch.tensor([[1, 0, 1]], dtype=torch.long)
 
-    result = model._attention_weight_spectral_norm(attn_weight, attention_mask)
+    result = layers_mod.spring_attention_weight_spectral_norm(
+        attn_weight,
+        tau=config.spring_attention_temperature,
+        padding_mask=attention_mask,
+    )
 
     tau = config.spring_attention_temperature
     mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool().squeeze(1)
@@ -145,7 +165,7 @@ def test_sasrec_spring_attention_weight_spectral_norm_masks_padding():
     torch.testing.assert_close(result, expected)
 
 
-def test_sasrec_spring_uses_gradient_checkpointing(monkeypatch):
+def test_sasrec_spring_uses_gradient_checkpointing():
     config = SASRecSpringModelConfig(
         item_size=12,
         hidden_size=4,
@@ -156,19 +176,11 @@ def test_sasrec_spring_uses_gradient_checkpointing(monkeypatch):
     model.gradient_checkpointing_enable()
     model.train()
 
-    calls = []
-
-    def fake_checkpoint(function, *args, **kwargs):
-        calls.append(kwargs)
-        return function(*args)
-
-    monkeypatch.setattr("genrec.models.model_seqrec.sasrec_spring.checkpoint", fake_checkpoint)
-
     batch_size, seq_len = 1, 3
     input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))
     attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
 
     model(input_ids=input_ids, attention_mask=attention_mask)
 
-    assert len(calls) == config.num_hidden_layers
-    assert all(call.get("use_reentrant") is False for call in calls)
+    assert model.gradient_checkpointing is True
+    assert all(getattr(layer, "gradient_checkpointing", False) for layer in model.layers)

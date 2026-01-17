@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple, cast
+from typing import List, Optional, Tuple
 
-from jaxtyping import Bool, Float, Int
+from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
 
-from ..modules import LlamaDecoderLayer, RMSNorm, RotaryEmbedding, create_attention_mask
+from ..modules import SpringLlamaDecoderLayer, RMSNorm, RotaryEmbedding, create_attention_mask, spring_power_iteration
 from .base import SeqRecModel, SeqRecModelConfigFactory, SeqRecModelFactory, SeqRecOutputFactory
 from .sasrec import SASRecModelConfig, SASRecModelOutput
 
@@ -97,13 +96,14 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
 
         self.layers = nn.ModuleList(
             [
-                LlamaDecoderLayer(
+                SpringLlamaDecoderLayer(
                     hidden_size=config.hidden_size,
                     num_heads=config.num_attention_heads,
                     intermediate_size=config.hidden_size * 4,
                     attention_dropout=config.attention_dropout,
                     attention_bias=config.attention_bias,
                     ffn_bias=config.ffn_bias,
+                    spring_attention_temperature=config.spring_attention_temperature,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
@@ -136,7 +136,10 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         Returns:
             SASRecSpringModelOutput: Model outputs packaged as a `SASRecSpringModelOutput` descendant.
         """
-        d, H = self.config.hidden_size, self.config.num_attention_heads
+        d = self.config.hidden_size
+        H = self.config.num_attention_heads
+        head_dim = self.head_dim
+        iters = self.config.spectral_norm_iters
 
         hidden_states: Float[torch.Tensor, "B L d"]
         hidden_states = self.embed_tokens(input_ids)
@@ -154,58 +157,56 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
 
         # Spring regularization on item embeddings
         if output_model_loss:
-            item_emb_sn = self._power_iteration(self.item_embed_weight, name="item_embed_weight")
+            item_emb_sn = spring_power_iteration(
+                self,
+                self.item_embed_weight,
+                name="item_embed_weight",
+                spectral_norm_iters=self.config.spectral_norm_iters,
+            )
             spring_loss_emb = item_emb_sn.log1p()
 
         all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
         all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
 
-        for layer_idx, layer in enumerate(self.layers):
+        for layer in self.layers:
             if output_hidden_states:
                 all_hidden_states.append(hidden_states)
 
-            def layer_forward(hidden_states: Float[torch.Tensor, "B L d"]):
-                return layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_embeddings=position_embeddings,
-                )
-
-            if self.gradient_checkpointing and self.training:
-                hidden_states, attn_weights = checkpoint(  # pyright: ignore[reportGeneralTypeIssues]
-                    layer_forward,
-                    hidden_states,
-                    use_reentrant=False,
-                )
-            else:
-                hidden_states, attn_weights = layer_forward(hidden_states)
+            attn_weight_sn: Optional[Float[torch.Tensor, "H"]] = None
+            hidden_states, attn_weights, attn_weight_sn = layer(
+                hidden_states,
+                padding_mask=attention_mask,
+                attention_mask=causal_mask,
+                position_embeddings=position_embeddings,
+                output_model_loss=output_model_loss,
+            )
 
             if output_attentions:
                 all_attentions.append(attn_weights)
 
-            if output_model_loss:
-                # Spring regularization on o_proj
-                attn_Wo: Float[torch.Tensor, "d H*d_head"] = layer.self_attn.o_proj.weight
-                attn_Wo_sn = self._power_iteration(attn_Wo, name=f"attn_{layer_idx}_wo")
+            # Spring regularizations on attention modules
+            if output_model_loss and attn_weight_sn is not None:
+                attn_Wo: Float[torch.Tensor, "d H*d_head"] = layer._layer.self_attn.o_proj.weight
+                attn_Wo_sn = spring_power_iteration(layer, attn_Wo, name=f"attn_wo", spectral_norm_iters=iters)
 
-                # Spring regularization on v_proj and attn weights
-                attn_Wv: Float[torch.Tensor, "H d_head d"] = layer.self_attn.v_proj.weight.view(H, self.head_dim, d)
+                attn_Wv: Float[torch.Tensor, "H d_head d"] = layer._layer.self_attn.v_proj.weight.view(H, head_dim, d)
                 attn_Av_sn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
                 for head in range(H):
                     attn_Wv_h: Float[torch.Tensor, "d_head d"] = attn_Wv[head]
-                    attn_Wv_h_sn = self._power_iteration(attn_Wv_h, name=f"attn_{layer_idx}_head_{head}_wv")
-                    attn_weight_h: Float[torch.Tensor, "B L L"] = attn_weights[:, head, :, :]
-                    attn_weight_h_sn = self._attention_weight_spectral_norm(attn_weight_h, attention_mask)
+                    attn_Wv_h_sn = spring_power_iteration(
+                        layer, attn_Wv_h, name=f"attn_head_{head}_wv", spectral_norm_iters=iters
+                    )
+                    attn_weight_h_sn: Float[torch.Tensor, ""] = attn_weight_sn[head]
                     attn_Av_sn = attn_Av_sn + attn_weight_h_sn * attn_Wv_h_sn.pow(2)
 
-                # Spring regularization on attention module
                 spring_loss_attn = spring_loss_attn + (attn_Av_sn.sqrt() * attn_Wo_sn).log1p()
 
-                # Spring regularization on FFN modules
-                ffn_W1 = layer.mlp.up_proj.weight
-                ffn_W2 = layer.mlp.down_proj.weight
-                ffn_W1_sn = self._power_iteration(ffn_W1, name=f"ffn_{layer_idx}_w1")
-                ffn_W2_sn = self._power_iteration(ffn_W2, name=f"ffn_{layer_idx}_w2")
+            # Spring regularizations on feed-forward network modules
+            if output_model_loss:
+                ffn_W1 = layer._layer.mlp.up_proj.weight
+                ffn_W2 = layer._layer.mlp.down_proj.weight
+                ffn_W1_sn = spring_power_iteration(layer, ffn_W1, name=f"ffn_w1", spectral_norm_iters=iters)
+                ffn_W2_sn = spring_power_iteration(layer, ffn_W2, name=f"ffn_w2", spectral_norm_iters=iters)
                 spring_loss_ffn = spring_loss_ffn + (ffn_W1_sn * ffn_W2_sn).log1p()
 
         # normalize by number of layers
@@ -230,97 +231,3 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
             hidden_states=tuple(all_hidden_states) if output_hidden_states else None,
             attentions=tuple(all_attentions) if output_attentions else None,
         )
-
-    def _power_iteration(
-        self,
-        W: Float[torch.Tensor, "m n"],
-        name: str = "",
-        eps: float = 1e-12,
-    ) -> Float[torch.Tensor, ""]:
-        """Performs power iteration to estimate the largest singular value of a matrix.
-
-        Args:
-            w (Float[torch.Tensor, "m n"]): The weight matrix, of shape (m, n).
-            name (str): Name prefix for the registered buffers to store the singular vectors.
-            If not empty, the left and right singular vectors will be registered as buffers
-            under the names `{name}_u` and `{name}_v`. If empty, no buffers
-            are registered. Default is "".
-            eps (float): Small value to avoid division by zero. Default is 1e-12.
-
-        Returns:
-            Float[torch.Tensor, ""]: Estimated largest singular value. The returned scalar tensor
-                has gradients w.r.t. the input weight matrix `W`.
-
-        References:
-            - Spectral Norm Regularization for Improving the Generalizability of Deep Learning. arXiv '17.
-            - Spectral Normalization for Generative Adversarial Networks. ICLR '18.
-        """
-        assert W.dim() == 2, "Input weight matrix must be 2-dimensional."
-        m, n = W.shape
-        device, dtype = W.device, W.dtype
-
-        def _get_singular_vector(shape: Tuple[int, ...], buffer_name: str) -> Float[torch.Tensor, "..."]:
-            """Fetches or initializes a singular vector. If `buffer_name` is empty,
-            a non-registered tensor is returned.
-            """
-            if not buffer_name:
-                vec = torch.randn(shape, device=device, dtype=dtype)  # no need to normalize here
-            else:
-                if not hasattr(self, buffer_name):
-                    vec = torch.randn(shape, device=device, dtype=dtype)
-                    vec = vec / (vec.norm() + eps)
-                    self.register_buffer(buffer_name, vec)
-                vec = getattr(self, buffer_name)
-            return vec.detach().clone()  # need clone, otherwise in-place update will fail in gradient backpropagation
-
-        u: Float[torch.Tensor, "m"] = _get_singular_vector((m,), name + "_u" if name else "")
-        v: Float[torch.Tensor, "n"] = _get_singular_vector((n,), name + "_v" if name else "")
-
-        for _ in range(self.config.spectral_norm_iters):
-            u = W @ v
-            u = u / (u.norm() + eps)
-            v = W.T @ u
-            v = v / (v.norm() + eps)
-
-        if name:
-            # must be in-place copy to fit into DataParallel
-            # see `torch.nn.utils.spectral_norm` for more details
-            getattr(self, name + "_u").copy_(u.detach())
-            getattr(self, name + "_v").copy_(v.detach())
-
-        singular_value: Float[torch.Tensor, ""] = torch.norm(W @ v)  # equivalent to u^T W v
-
-        return singular_value
-
-    def _attention_weight_spectral_norm(
-        self,
-        attn_weight: Float[torch.Tensor, "B L L"],
-        attention_mask: Int[torch.Tensor, "B L"],
-    ) -> Float[torch.Tensor, ""]:
-        """Estimates the spectral norm of the attention weight by its upper bound,
-        i.e., 1-norm of the attention weight. Here we flatten the batch and sequence
-        dimensions to one dimension, and estimate the 1-norm by log-sum-exp trick.
-        The padding positions are masked out by the `attention_mask`.
-
-        Args:
-            attn_weight (Float[torch.Tensor, "B L L"]): Attention weight tensor
-                of shape (batch_size, seq_len, seq_len).
-            attention_mask (Int[torch.Tensor, "B L"]): Attention mask tensor
-                of shape (batch_size, seq_len).
-
-        Returns:
-            Float[torch.Tensor, ""]: Estimated spectral norm of the attention weight.
-        """
-        # remask the attention weights to fix non-zero values at all-masked positions
-        causal_mask: Bool[torch.Tensor, "B 1 L L"]
-        causal_mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
-        attn_weight = attn_weight.masked_fill(causal_mask.squeeze(1), 0.0)
-
-        query_sums: Float[torch.Tensor, "B*L"] = attn_weight.sum(dim=-2).flatten()
-        attention_mask_flat: Bool[torch.Tensor, "B*L"] = attention_mask.bool().flatten()
-        masked_query_sums: Float[torch.Tensor, "M"] = query_sums[attention_mask_flat]
-
-        tau = self.config.spring_attention_temperature
-        norm_p1 = torch.logsumexp(masked_query_sums * tau, dim=0) / tau
-
-        return norm_p1

@@ -22,11 +22,22 @@ __all__ += [
     "RMSNorm",
 ]
 
-from .layers import LlamaDecoderLayer, SequentialTransductionUnit
+from .layers import (
+    LlamaDecoderLayer,
+    SequentialTransductionUnit,
+    SpringLlamaDecoderLayer,
+    SpringSequentialTransductionUnit,
+    spring_attention_weight_spectral_norm,
+    spring_power_iteration,
+)
 
 __all__ += [
     "LlamaDecoderLayer",
     "SequentialTransductionUnit",
+    "SpringLlamaDecoderLayer",
+    "SpringSequentialTransductionUnit",
+    "spring_attention_weight_spectral_norm",
+    "spring_power_iteration",
 ]
 
 from .posemb import (

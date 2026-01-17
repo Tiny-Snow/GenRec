@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple, cast
+from typing import List, Tuple
 
 from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
 
 from ..modules import LlamaDecoderLayer, RMSNorm, RotaryEmbedding, create_attention_mask
 from .base import (
@@ -150,21 +149,11 @@ class SASRecModel(SeqRecModel[SASRecModelConfig, SASRecModelOutput]):
             if output_hidden_states:
                 all_hidden_states.append(hidden_states)
 
-            def layer_forward(hidden_states: Float[torch.Tensor, "B L d"]):
-                return layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_embeddings=position_embeddings,
-                )
-
-            if self.gradient_checkpointing and self.training:
-                hidden_states, attn_weights = checkpoint(  # pyright: ignore[reportGeneralTypeIssues]
-                    layer_forward,
-                    hidden_states,
-                    use_reentrant=False,
-                )
-            else:
-                hidden_states, attn_weights = layer_forward(hidden_states)
+            hidden_states, attn_weights = layer(
+                hidden_states,
+                attention_mask=causal_mask,
+                position_embeddings=position_embeddings,
+            )
 
             if output_attentions:
                 all_attentions.append(attn_weights)

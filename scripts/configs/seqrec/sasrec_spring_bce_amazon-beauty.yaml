@@ -27,8 +27,6 @@ collator:
 model:
     type: sasrec_spring
 
-    gradient_checkpointing: false  # whether to use gradient checkpointing to save memory
-
     config:
         # base model parameters
         hidden_size: 256
@@ -68,6 +66,9 @@ trainer:
 
         # training arguments - Parallelism & precision
         dataloader_num_workers: 4
+        gradient_checkpointing: false
+        bf16: false
+        tf32: true
 
         # base trainer parameters
         norm_embeddings: false  # whether to L2-normalize user and item embeddings

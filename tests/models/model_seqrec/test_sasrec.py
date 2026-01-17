@@ -56,7 +56,7 @@ def test_sasrec_returns_optional_collections_when_requested() -> None:
         assert attn.shape == (batch_size, config.num_attention_heads, seq_len, seq_len)
 
 
-def test_sasrec_uses_gradient_checkpointing(monkeypatch) -> None:
+def test_sasrec_uses_gradient_checkpointing() -> None:
     config = SASRecModelConfig(
         item_size=8,
         hidden_size=4,
@@ -67,14 +67,6 @@ def test_sasrec_uses_gradient_checkpointing(monkeypatch) -> None:
     model.gradient_checkpointing_enable()
     model.train()
 
-    calls = []
-
-    def fake_checkpoint(function, *args, **kwargs):
-        calls.append(kwargs)
-        return function(*args)
-
-    monkeypatch.setattr("genrec.models.model_seqrec.sasrec.checkpoint", fake_checkpoint)
-
     batch_size, seq_len = 1, 3
     input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))
     attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
@@ -82,5 +74,5 @@ def test_sasrec_uses_gradient_checkpointing(monkeypatch) -> None:
     output = model(input_ids=input_ids, attention_mask=attention_mask)
 
     assert output.last_hidden_state.shape == (batch_size, seq_len, config.hidden_size)
-    assert len(calls) == config.num_hidden_layers
-    assert all(call.get("use_reentrant") is False for call in calls)
+    assert model.gradient_checkpointing is True
+    assert all(getattr(layer, "gradient_checkpointing", False) for layer in model.layers)

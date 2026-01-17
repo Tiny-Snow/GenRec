@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, cast
+from typing import List, Optional, Tuple
 
 from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-from torch.utils.checkpoint import checkpoint
 
 from ..modules import (
     LearnableInputPositionalEmbedding,
@@ -216,33 +215,23 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
         if not self.config.enable_learnable_rel_posemb and self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(hidden_states)
 
+        if self.config.enable_input_pos_emb and self.input_pos_emb is not None:
+            hidden_states = self.input_pos_emb(hidden_states)
+
         model_loss = None  # By default, HSTU does not compute model loss internally.
         all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
         all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
-
-        if self.config.enable_input_pos_emb and self.input_pos_emb is not None:
-            hidden_states = self.input_pos_emb(hidden_states)
 
         for layer in self.layers:
             if output_hidden_states:
                 all_hidden_states.append(hidden_states)
 
-            def layer_forward(hidden_states: Float[torch.Tensor, "B L d"]):
-                return layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_embeddings=position_embeddings,
-                    timestamps=timestamps,
-                )
-
-            if self.gradient_checkpointing and self.training:
-                hidden_states, attn_weights = checkpoint(  # pyright: ignore[reportGeneralTypeIssues]
-                    layer_forward,
-                    hidden_states,
-                    use_reentrant=False,
-                )
-            else:
-                hidden_states, attn_weights = layer_forward(hidden_states)
+            hidden_states, attn_weights = layer(
+                hidden_states,
+                attention_mask=causal_mask,
+                position_embeddings=position_embeddings,
+                timestamps=timestamps,
+            )
 
             if output_attentions:
                 all_attentions.append(attn_weights)

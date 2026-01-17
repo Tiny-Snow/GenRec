@@ -147,7 +147,7 @@ def test_seqrec_trainer_compute_loss_with_model_loss_and_outputs(
     last_hidden = forward_outputs.last_hidden_state[:, -1, :]
     item_embed_weight = trainer.model.item_embed_weight
     expected_logits = last_hidden @ item_embed_weight.T
-    _, expected_topk = torch.topk(expected_logits[:, 1:], k=trainer.max_top_k, dim=1)
+    _, expected_topk = torch.topk(expected_logits, k=trainer.max_top_k, dim=1)
     torch.testing.assert_close(output_dict["topk_indices"], expected_topk)
     assert torch.equal(trainer.last_seen_num_items, num_items_in_batch)
 
@@ -247,7 +247,6 @@ def test_seqrec_trainer_normalizes_logits_when_enabled(tmp_path: Path) -> None:
     last_hidden = forward_outputs.last_hidden_state[:, -1, :]
     item_embed_weight = trainer.model.item_embed_weight
     expected_logits = F.normalize(last_hidden, p=2, dim=-1) @ F.normalize(item_embed_weight, p=2, dim=-1).T
-    expected_logits = expected_logits[:, 1:]  # exclude padding token logits
 
     _, expected_topk = torch.topk(expected_logits, k=trainer.max_top_k, dim=1)
     torch.testing.assert_close(output_dict["topk_indices"], expected_topk)

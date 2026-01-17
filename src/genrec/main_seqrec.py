@@ -188,7 +188,6 @@ def main():
     assert "model" in cfg, "`model` configuration section is missing."
     model_cfg = cfg["model"]
     model_type: str = model_cfg.pop("type", None)
-    gradient_checkpointing_enabled = bool(model_cfg.pop("gradient_checkpointing", False))
 
     model_config_cfg = model_cfg.pop("config", {})
     item_size = train_dataset.item_size
@@ -204,17 +203,6 @@ def main():
         model = SeqRecModelFactory.create(model_type, config=model_config, **model_cfg)
         if accelerator.is_main_process:
             logger.info(f"Initialized model {model_type}.")
-
-    if gradient_checkpointing_enabled:
-        if hasattr(model, "gradient_checkpointing_enable"):
-            model.gradient_checkpointing_enable()
-            if accelerator.is_main_process:
-                logger.info("Enabled gradient checkpointing for the model as requested by configuration.")
-        else:  # pragma: no cover - defensive
-            raise AttributeError("Model does not support gradient checkpointing enablement.")
-    else:
-        if hasattr(model, "gradient_checkpointing_disable"):
-            model.gradient_checkpointing_disable()
 
     # Builds trainer. Refer to the constructor of `SeqRecTrainer`.
     assert "trainer" in cfg, "`trainer` configuration section is missing."

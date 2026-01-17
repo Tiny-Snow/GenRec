@@ -370,11 +370,11 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
                 last_step_hidden_states = F.normalize(last_step_hidden_states, p=2, dim=-1)
                 item_embed_weight = F.normalize(item_embed_weight, p=2, dim=-1)
 
-            logits: Float[torch.Tensor, "B I"]
-            logits = (last_step_hidden_states @ item_embed_weight.T)[:, 1:]  # exclude padding index 0
+            logits: Float[torch.Tensor, "B I+1"]
+            logits = last_step_hidden_states @ item_embed_weight.T
 
             effective_top_k = max(1, min(self.max_top_k, self.item_size))
-            _, topk_indices = torch.topk(logits, k=effective_top_k, dim=1)
+            _, topk_indices = torch.topk(logits, k=effective_top_k, dim=-1)  # may predict padding index
 
             output_dict: Dict[str, torch.Tensor] = {
                 "loss": loss,

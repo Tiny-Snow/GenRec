@@ -222,17 +222,6 @@ class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], A
         """Returns the size of the item vocabulary (excluding padding token)."""
         return self.config.item_size
 
-    def _set_gradient_checkpointing(
-        self,
-        enable: bool = True,
-        gradient_checkpointing_func: Optional[Callable[..., torch.Tensor]] = None,
-    ) -> None:
-        """Hooks into HF's gradient checkpointing toggles by tracking the enable flag."""
-
-        self.gradient_checkpointing = enable
-        if gradient_checkpointing_func is not None:
-            self._gradient_checkpointing_func = gradient_checkpointing_func  # pragma: no cover - optional hook
-
     @abstractmethod
     def forward(  # pragma: no cover - abstract method
         self,
