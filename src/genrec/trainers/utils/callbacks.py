@@ -42,11 +42,12 @@ class EpochIntervalEvalCallback(TrainerCallback):
 class HardStopCallback(TrainerCallback):
     """Callback to stop training at a specific epoch."""
 
-    def __init__(self, stop_epoch: int) -> None:
+    def __init__(self, stop_epoch: int = -1) -> None:
         """Initializes the callback with the stopping epoch.
 
         Args:
-            stop_epoch (int): The epoch at which to stop training.
+            stop_epoch (int): The epoch at which to stop training. If less than 0, training continues
+                until the maximum number of epochs. Default is -1.
         """
         self.stop_epoch = stop_epoch
 
@@ -62,6 +63,6 @@ class HardStopCallback(TrainerCallback):
         """
         assert state.epoch is not None, "HardStopCallback requires `state.epoch` to be not None."
         current_epoch = int(state.epoch)
-        if current_epoch >= self.stop_epoch:
+        if self.stop_epoch >= 0 and current_epoch >= self.stop_epoch:
             control.should_training_stop = True
         return control

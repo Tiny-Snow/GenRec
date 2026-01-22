@@ -142,8 +142,8 @@ class SeqRecTrainingArguments(TrainingArguments):
     )
 
     train_stop_epoch: int = field(
-        default=100,
-        metadata={"help": "Number of epochs to stop training. Default is 100."},
+        default=-1,
+        metadata={"help": "Number of epochs to stop training. Default is -1 (no early stop)."},
     )
 
     metrics: Sequence[Tuple[str, Dict[str, Any]]] = field(
