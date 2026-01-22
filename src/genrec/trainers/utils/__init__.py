@@ -2,10 +2,11 @@
 
 __all__ = []
 
-from .callbacks import EpochIntervalEvalCallback
+from .callbacks import EpochIntervalEvalCallback, HardStopCallback
 
 __all__ += [
     "EpochIntervalEvalCallback",
+    "HardStopCallback",
 ]
 
 from .evaluations import MetricFactory, MetricFn

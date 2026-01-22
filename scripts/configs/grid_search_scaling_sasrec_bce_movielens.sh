@@ -23,7 +23,7 @@ TEMPLATE_PATH="${CONFIG_DIR}/seqrec/template.yaml"
 # Set up search config path options.
 # SCALING_SCALES=("xxs" "xs" "s" "b" "l" "xl" "xxl")
 SCALING_SCALES=("s" "b")
-SEARCH_PREFIX="${CONFIG_DIR}/configs/seqrec/scaling/sasrec_bce_movielens/sasrec_bce_movielens"
+SEARCH_PREFIX="${CONFIG_DIR}/seqrec/scaling/sasrec_bce_movielens/sasrec_bce_movielens"
 
 # Set up output directory.
 OUTPUT_ROOT="${BASE_DIR}/../outputs/seqrec/scaling/sasrec_bce_movielens"

@@ -16,7 +16,7 @@ from transformers import EvalPrediction, Trainer, TrainerCallback, TrainingArgum
 
 from ...datasets import SeqRecCollator, SeqRecDataset
 from ...models import SeqRecModel, SeqRecOutput
-from ..utils.callbacks import EpochIntervalEvalCallback
+from ..utils.callbacks import EpochIntervalEvalCallback, HardStopCallback
 from ..utils.evaluations import MetricFactory, clip_top_k
 
 __all__ = [
@@ -139,6 +139,11 @@ class SeqRecTrainingArguments(TrainingArguments):
     eval_interval: int = field(
         default=5,
         metadata={"help": "Number of epochs between each evaluation. Default is 5."},
+    )
+
+    train_stop_epoch: int = field(
+        default=100,
+        metadata={"help": "Number of epochs to stop training. Default is 100."},
     )
 
     metrics: Sequence[Tuple[str, Dict[str, Any]]] = field(
@@ -278,8 +283,8 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
             eval_dataset (Optional[SeqRecDataset]): Dataset used for evaluation.
             compute_metrics (Optional[Callable[[EvalPrediction], Dict]]): Function used to compute
                 metrics during evaluation. Defaults to :func:`compute_seqrec_metrics`.
-            callbacks (Optional[List[TrainerCallback]]): Trainer callbacks (defaults to
-                `EpochIntervalEvalCallback`).
+            callbacks (Optional[List[TrainerCallback]]): Trainer callbacks. Defaults to
+                `[EpochIntervalEvalCallback, HardStopCallback]`.
             **kwargs (Any): Additional keyword arguments forwarded to the base `Trainer`.
         """
         self.item_size = train_dataset.item_size
@@ -302,7 +307,10 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
             )
 
         if callbacks is None:
-            callbacks = [EpochIntervalEvalCallback(eval_interval=args.eval_interval)]
+            callbacks = [
+                EpochIntervalEvalCallback(eval_interval=args.eval_interval),
+                HardStopCallback(stop_epoch=args.train_stop_epoch),
+            ]
 
         super().__init__(
             model=model,
