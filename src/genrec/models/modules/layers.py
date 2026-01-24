@@ -322,10 +322,10 @@ def spring_power_iteration(
 
 
 def spring_attention_weight_spectral_norm(
-    attn_weight: Float[torch.Tensor, "B L L"],
+    attn_weights: Float[torch.Tensor, "B H L L"],
     tau: float,
     padding_mask: Optional[Int[torch.Tensor, "B L"]] = None,
-) -> Float[torch.Tensor, ""]:
+) -> Float[torch.Tensor, "H"]:
     """Estimates the spectral norm of the attention weight by its upper bound,
     i.e., 1-norm of the attention weight. Here we flatten the batch and sequence
     dimensions to one dimension, and estimate the 1-norm by log-sum-exp trick.
@@ -343,8 +343,8 @@ def spring_attention_weight_spectral_norm(
         the above upper bound in practice.
 
     Args:
-        attn_weight (Float[torch.Tensor, "B L L"]): Attention weight tensor
-            of shape (batch_size, seq_len, seq_len).
+        attn_weights (Float[torch.Tensor, "B H L L"]): Attention weight tensor
+            of shape (batch_size, num_heads, seq_len, seq_len).
         tau (float): Temperature for the Spring regularization on attention module.
         padding_mask (Optional[Int[torch.Tensor, "B L"]]): Optional padding mask
             where 1 indicates valid tokens and 0 indicates padding tokens. This is
@@ -352,21 +352,21 @@ def spring_attention_weight_spectral_norm(
             is applied. Default is None.
 
     Returns:
-        Float[torch.Tensor, ""]: Estimated spectral norm of the attention weight.
+        Float[torch.Tensor, "H"]: Estimated spectral norm of the attention weight for each head.
     """
     if padding_mask is not None:
         # remask the attention weights to fix non-zero values at all-masked positions
         causal_mask: Bool[torch.Tensor, "B 1 L L"]
         causal_mask = create_attention_mask(padding_mask, is_causal=True, mask_value=1).bool()
-        attn_weight = attn_weight.masked_fill(causal_mask.squeeze(1), 0.0)
+        attn_weights = attn_weights.masked_fill(causal_mask, 0.0)
 
-        query_sums: Float[torch.Tensor, "B*L"] = attn_weight.sum(dim=-2).flatten()
+        query_sums: Float[torch.Tensor, "H B*L"] = attn_weights.sum(dim=-2).permute(1, 0, 2).flatten(start_dim=1)
         attention_mask_flat: Bool[torch.Tensor, "B*L"] = padding_mask.bool().flatten()
-        masked_query_sums: Float[torch.Tensor, "M"] = query_sums[attention_mask_flat]
-        norm_p1 = torch.logsumexp(masked_query_sums * tau, dim=0) / tau
+        masked_query_sums: Float[torch.Tensor, "H M"] = query_sums[:, attention_mask_flat]
+        norm_p1: Float[torch.Tensor, "H"] = torch.logsumexp(masked_query_sums * tau, dim=-1) / tau
     else:  # pragma: no cover - rarely used
-        query_sums: Float[torch.Tensor, "B*L"] = attn_weight.sum(dim=-2).flatten()
-        norm_p1 = torch.logsumexp(query_sums * tau, dim=0) / tau
+        query_sums: Float[torch.Tensor, "H B*L"] = attn_weights.sum(dim=-2).permute(1, 0, 2).flatten(start_dim=1)
+        norm_p1: Float[torch.Tensor, "H"] = torch.logsumexp(query_sums * tau, dim=-1) / tau
 
     return norm_p1
 
@@ -449,7 +449,7 @@ class SpringLlamaDecoderLayer(GradientCheckpointingLayer):
             attention V/O projection Spring loss) are computed outside this layer for the consistency with gradient
             checkpointing.
         """
-        hidden_states, attn_weights = self._layer(
+        hidden_states, attn_weights = self._layer.forward(  # NOTE: to avoid meaningless recomputation in checkpointing
             hidden_states,
             attention_mask=attention_mask,
             position_embeddings=position_embeddings,
@@ -458,15 +458,11 @@ class SpringLlamaDecoderLayer(GradientCheckpointingLayer):
         # Spring regularizations on attention weights
         attn_weight_sn: Optional[Float[torch.Tensor, "H"]] = None
         if output_model_loss:
-            attn_weight_sn = torch.zeros(self._layer.num_heads, device=hidden_states.device, dtype=hidden_states.dtype)
-            for head in range(self._layer.num_heads):
-                attn_weight_h: Float[torch.Tensor, "B L L"] = attn_weights[:, head, :, :]
-                attn_weight_h_sn = spring_attention_weight_spectral_norm(
-                    attn_weight_h,
-                    tau=self.spring_attention_temperature,
-                    padding_mask=padding_mask,
-                )
-                attn_weight_sn[head] = attn_weight_h_sn
+            attn_weight_sn = spring_attention_weight_spectral_norm(
+                attn_weights,
+                tau=self.spring_attention_temperature,
+                padding_mask=padding_mask,
+            )
         else:
             attn_weight_sn = None
 
@@ -580,7 +576,7 @@ class SpringSequentialTransductionUnit(GradientCheckpointingLayer):
             attention V/O projection Spring loss) are computed outside this layer for the consistency with gradient
             checkpointing.
         """
-        hidden_states, attn_weights = self._layer(
+        hidden_states, attn_weights = self._layer.forward(  # NOTE: to avoid meaningless recomputation in checkpointing
             hidden_states,
             attention_mask=attention_mask,
             position_embeddings=position_embeddings,
@@ -590,15 +586,11 @@ class SpringSequentialTransductionUnit(GradientCheckpointingLayer):
         # Spring regularizations on attention weights
         attn_weight_sn: Optional[Float[torch.Tensor, "H"]] = None
         if output_model_loss:
-            attn_weight_sn = torch.zeros(self._layer.num_heads, device=hidden_states.device, dtype=hidden_states.dtype)
-            for head in range(self._layer.num_heads):
-                attn_weight_h: Float[torch.Tensor, "B L L"] = attn_weights[:, head, :, :]
-                attn_weight_h_sn = spring_attention_weight_spectral_norm(
-                    attn_weight_h,
-                    tau=self.spring_attention_temperature,
-                    padding_mask=padding_mask,
-                )
-                attn_weight_sn[head] = attn_weight_h_sn
+            attn_weight_sn = spring_attention_weight_spectral_norm(
+                attn_weights,
+                tau=self.spring_attention_temperature,
+                padding_mask=padding_mask,
+            )
         else:
             attn_weight_sn = None
 

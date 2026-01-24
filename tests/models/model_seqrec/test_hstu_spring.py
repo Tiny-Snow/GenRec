@@ -29,15 +29,14 @@ def test_hstu_spring_returns_weighted_model_loss(monkeypatch) -> None:
         "ffn_w1": 1.2,
         "ffn_w2": 0.8,
     }
-    attn_sn_iter = iter([4.0, 5.0])
+    attn_sn_values = torch.tensor([4.0, 5.0], dtype=torch.float32)
 
     def fake_power_iteration(module, weight, name="", spectral_norm_iters=1, eps=1e-12):
         value = power_values.get(name, 1.0)
         return torch.tensor(value, device=weight.device, dtype=weight.dtype)
 
     def fake_attention_weight_spectral_norm(attn_weight, tau, padding_mask=None):
-        value = next(attn_sn_iter)
-        return torch.tensor(value, device=attn_weight.device, dtype=attn_weight.dtype)
+        return attn_sn_values.to(device=attn_weight.device, dtype=attn_weight.dtype)
 
     monkeypatch.setattr(hstu_spring, "spring_power_iteration", fake_power_iteration)
     monkeypatch.setattr(
@@ -67,7 +66,7 @@ def test_hstu_spring_returns_weighted_model_loss(monkeypatch) -> None:
     device = output.model_loss.device
     dtype = output.model_loss.dtype
 
-    attn_sn = torch.tensor([4.0, 5.0], device=device, dtype=dtype)
+    attn_sn = attn_sn_values.to(device=device, dtype=dtype)
     wv_values = torch.tensor(
         [power_values["attn_head_0_wv"], power_values["attn_head_1_wv"]],
         device=device,
@@ -175,13 +174,13 @@ def test_hstu_spring_model_loss_without_ffn(monkeypatch) -> None:
         "attn_head_0_wv": 1.1,
         "attn_head_1_wv": 0.9,
     }
-    attn_sn_iter = iter([1.5, 1.2])
+    attn_sn_values = torch.tensor([1.5, 1.2], dtype=torch.float32)
 
     def fake_power_iteration(module, weight, name="", spectral_norm_iters=1, eps=1e-12):
         return torch.tensor(power_values.get(name, 1.0), device=weight.device, dtype=weight.dtype)
 
     def fake_attention_weight_spectral_norm(attn_weight, tau, padding_mask=None):
-        return torch.tensor(next(attn_sn_iter), device=attn_weight.device, dtype=attn_weight.dtype)
+        return attn_sn_values.to(device=attn_weight.device, dtype=attn_weight.dtype)
 
     monkeypatch.setattr(hstu_spring, "spring_power_iteration", fake_power_iteration)
     monkeypatch.setattr(
@@ -208,7 +207,7 @@ def test_hstu_spring_model_loss_without_ffn(monkeypatch) -> None:
 
     device = output.model_loss.device
     dtype = output.model_loss.dtype
-    attn_sn = torch.tensor([1.5, 1.2], device=device, dtype=dtype)
+    attn_sn = attn_sn_values.to(device=device, dtype=dtype)
     wv_values = torch.tensor(
         [power_values["attn_head_0_wv"], power_values["attn_head_1_wv"]],
         device=device,
@@ -242,7 +241,11 @@ def test_hstu_spring_normalizes_embeddings_for_spring_loss(monkeypatch) -> None:
         return torch.ones((), device=weight.device, dtype=weight.dtype)
 
     def fake_attention_weight_spectral_norm(attn_weight, tau, padding_mask=None):
-        return torch.ones((), device=attn_weight.device, dtype=attn_weight.dtype)
+        return torch.ones(
+            (config.num_attention_heads,),
+            device=attn_weight.device,
+            dtype=attn_weight.dtype,
+        )
 
     monkeypatch.setattr(hstu_spring, "spring_power_iteration", fake_power_iteration)
     monkeypatch.setattr(
@@ -326,9 +329,16 @@ def test_hstu_spring_attention_weight_spectral_norm_masks_padding() -> None:
     attn_weight = torch.tensor(
         [
             [
-                [0.3, 0.2, 0.1],
-                [0.1, 0.4, 0.2],
-                [0.2, 0.1, 0.3],
+                [
+                    [0.3, 0.2, 0.1],
+                    [0.1, 0.4, 0.2],
+                    [0.2, 0.1, 0.3],
+                ],
+                [
+                    [0.2, 0.3, 0.1],
+                    [0.3, 0.1, 0.2],
+                    [0.1, 0.2, 0.4],
+                ],
             ]
         ],
         dtype=torch.float32,
@@ -342,11 +352,12 @@ def test_hstu_spring_attention_weight_spectral_norm_masks_padding() -> None:
     )
 
     tau = config.spring_attention_temperature
-    mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool().squeeze(1)
+    mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
     masked_attn = attn_weight.masked_fill(mask, 0.0)
-    query_sums = masked_attn.sum(dim=-2).flatten()
-    masked = query_sums[attention_mask.bool().flatten()]
-    expected = torch.logsumexp(masked * tau, dim=0) / tau
+    query_sums = masked_attn.sum(dim=-2).permute(1, 0, 2).flatten(start_dim=1)
+    attention_mask_flat = attention_mask.bool().flatten()
+    masked_query_sums = query_sums[:, attention_mask_flat]
+    expected = torch.logsumexp(masked_query_sums * tau, dim=-1) / tau
 
     torch.testing.assert_close(result, expected)
 
