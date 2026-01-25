@@ -9,7 +9,7 @@ Expected configuration schema::
     save_predictions: false  # whether to save the predictions on the test set
     dataset:
         type: seqrec
-        interaction_data_path: data/movielens/train.parquet
+        interaction_data_path: /path/to/movielens-1m/proc/user2item.pkl
         ...  # dataset-specific parameters
     collator:
         type: seqrec
