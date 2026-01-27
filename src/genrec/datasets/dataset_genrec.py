@@ -76,6 +76,7 @@ class GenRecDataset(RecDataset[GenRecExample]):
         sid_cache: Optional[Int[np.ndarray, "I+1 C"]] = None,
         textual_data_path: Optional[Union[pd.DataFrame, str, Path]] = None,
         lm_encoder: Optional[LMEncoder] = None,
+        truncation_strategy: str = "tail",
     ) -> None:
         """Initialises the dataset and materialises user-level metadata.
 
@@ -93,7 +94,15 @@ class GenRecDataset(RecDataset[GenRecExample]):
                 pickle file with `ItemID` and `Title` columns.
             lm_encoder (Optional[LMEncoder]): Optional encoder used to transform item titles into
                 dense embeddings.
+            truncation_strategy (str): Strategy for truncating interaction histories, supported
+                options are `"tail"` and `"slide"`. `"tail"` will directly truncate the user history
+                to `max_seq_length`, then construct training examples with length of history from
+                `min_seq_length` to (up to) `max_seq_length`. `"slide"` will use a sliding window of
+                size `max_seq_length` over the entire user history to construct training examples.
+                Defaults to `"tail"`.
         """
+        assert truncation_strategy in {"tail", "slide"}, f"Unsupported truncation strategy: {truncation_strategy}."
+        self.truncation_strategy = truncation_strategy
         super().__init__(
             interaction_data_path,
             split,
@@ -113,6 +122,7 @@ class GenRecDataset(RecDataset[GenRecExample]):
         examples: List[GenRecExample] = []
         user_ids = np.arange(self.user_size, dtype=np.int64)
         for user_id, items, timestamps in zip(user_ids, self.user_interactions, self.user_interaction_timestamps):
+            items, timestamps = self._tail_truncate(items, timestamps)
             for context, target, times in self._iter_split(items, timestamps):
                 if context.shape[0] < self._min_seq_length:  # pragma: no cover - insufficient length
                     continue
@@ -144,6 +154,20 @@ class GenRecDataset(RecDataset[GenRecExample]):
         else:  # test split
             if seq_len >= 2:
                 yield items[:-1], int(items[-1]), times[:-1]
+
+    def _tail_truncate(
+        self,
+        items: Int[np.ndarray, "..."],
+        times: Int[np.ndarray, "..."],
+    ) -> Tuple[Int[np.ndarray, "..."], Int[np.ndarray, "..."]]:
+        """Truncates the interaction history by keeping the most recent interactions.
+        We trim the history to `max_seq_length + 3` to account for the target and
+        validation/test items.
+        """
+        if self.truncation_strategy == "tail":
+            return items[-self._max_seq_length - 3 :], times[-self._max_seq_length - 3 :]
+        else:
+            return items, times
 
     def _construct_example(
         self,

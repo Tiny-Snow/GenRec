@@ -385,6 +385,53 @@ def test_genrec_iter_split_handles_eval_and_test(interaction_frame, split, expec
     assert context_times.tolist() == times[: len(expected_context)].tolist()
 
 
+def test_genrec_tail_truncation_keeps_recent_history_only():
+    frame = _make_short_interaction_frame(length=12)
+    raw_items = np.array(frame.iloc[0]["ItemID"], dtype=np.int64)
+    raw_times = np.array(frame.iloc[0]["Timestamp"], dtype=np.int64)
+    max_seq_length = 4
+
+    dataset = GenRecDataset(
+        interaction_data_path=frame,
+        split=DatasetSplitLiteral.TRAIN,
+        max_seq_length=max_seq_length,
+        min_seq_length=1,
+        truncation_strategy="tail",
+    )
+
+    truncated_items, truncated_times = dataset._tail_truncate(raw_items, raw_times)
+    np.testing.assert_array_equal(truncated_items, raw_items[-(max_seq_length + 3) :])
+    np.testing.assert_array_equal(truncated_times, raw_times[-(max_seq_length + 3) :])
+    assert len(dataset) == max_seq_length
+
+    concatenated_contexts = np.concatenate([example.input_ids for example in dataset])
+    assert concatenated_contexts.min() == truncated_items[0]
+
+
+def test_genrec_slide_truncation_retains_full_history_for_windows():
+    frame = _make_short_interaction_frame(length=12)
+    raw_items = np.array(frame.iloc[0]["ItemID"], dtype=np.int64)
+    raw_times = np.array(frame.iloc[0]["Timestamp"], dtype=np.int64)
+    max_seq_length = 4
+
+    dataset = GenRecDataset(
+        interaction_data_path=frame,
+        split=DatasetSplitLiteral.TRAIN,
+        max_seq_length=max_seq_length,
+        min_seq_length=1,
+        truncation_strategy="slide",
+    )
+
+    truncated_items, truncated_times = dataset._tail_truncate(raw_items, raw_times)
+    np.testing.assert_array_equal(truncated_items, raw_items)
+    np.testing.assert_array_equal(truncated_times, raw_times)
+    assert len(dataset) == raw_items.shape[0] - 3
+
+    concatenated_contexts = np.concatenate([example.input_ids for example in dataset])
+    assert concatenated_contexts.min() == raw_items[0]
+    assert dataset[0].input_ids.tolist() == [int(raw_items[0])]
+
+
 @pytest.mark.parametrize("dataset_fixture", ["genrec_dataset", "seqrec_dataset"])
 def test_dataset_item_popularity_matches_item_size(request, dataset_fixture):
     dataset = request.getfixturevalue(dataset_fixture)
