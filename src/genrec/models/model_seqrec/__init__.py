@@ -51,3 +51,11 @@ __all__ += [
     "SASRecSpringModelConfig",
     "SASRecSpringModelOutput",
 ]
+
+from .sasrec_tpab import SASRecTPABModel, SASRecTPABModelConfig, SASRecTPABModelOutput
+
+__all__ += [
+    "SASRecTPABModel",
+    "SASRecTPABModelConfig",
+    "SASRecTPABModelOutput",
+]
