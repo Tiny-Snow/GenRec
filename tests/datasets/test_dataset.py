@@ -58,6 +58,13 @@ def _make_textual_frame(item_pool: int) -> pd.DataFrame:
     )
 
 
+def _make_aux_item_embeddings(item_pool: int, aux_dim: int) -> np.ndarray:
+    values = np.arange((item_pool + 1) * aux_dim, dtype=np.float32)
+    values = values.reshape(item_pool + 1, aux_dim)
+    values[0] = 0.0
+    return values
+
+
 def _make_short_interaction_frame(length: int) -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -105,7 +112,12 @@ def _assert_seqrec_batches(loader: DataLoader, expected_sizes: list[int], num_ne
         assert batch["negative_item_ids"].dtype == torch.int32
 
 
-def _assert_quantizer_batches(loader: DataLoader, expected_sizes: list[int], embedding_dim: int) -> None:
+def _assert_quantizer_batches(
+    loader: DataLoader,
+    expected_sizes: list[int],
+    embedding_dim: int,
+    aux_embedding_dim: int | None = None,
+) -> None:
     batches = list(loader)
     assert len(batches) == len(expected_sizes)
     for idx, batch in enumerate(batches):
@@ -113,6 +125,9 @@ def _assert_quantizer_batches(loader: DataLoader, expected_sizes: list[int], emb
         assert batch["item_id"].shape == (expected_size,)
         assert batch["item_embedding"].shape == (expected_size, embedding_dim)
         assert batch["item_embedding"].dtype == torch.float32
+        if aux_embedding_dim is not None:
+            assert batch["aux_item_embedding"].shape == (expected_size, aux_embedding_dim)
+            assert batch["aux_item_embedding"].dtype == torch.float32
 
 
 @pytest.fixture()
@@ -185,14 +200,43 @@ def seqrec_dataset(interaction_frame, sid_cache) -> SeqRecDataset:
 
 @pytest.fixture()
 def quantizer_dataset(interaction_frame, textual_frame, dummy_encoder) -> QuantizerDataset:
+    item_pool = int(textual_frame["ItemID"].max())
+    aux_embeddings = _make_aux_item_embeddings(item_pool, aux_dim=3)
     return QuantizerDataset(
         interaction_data_path=interaction_frame,
-        split=DatasetSplitLiteral.TRAIN,
         max_seq_length=4,
         min_seq_length=1,
         textual_data_path=textual_frame,
         lm_encoder=dummy_encoder,
+        aux_item_embeddings=aux_embeddings,
     )
+
+
+def test_quantizer_dataset_aux_properties(interaction_frame, textual_frame, dummy_encoder) -> None:
+    item_pool = int(textual_frame["ItemID"].max())
+    aux_embeddings = _make_aux_item_embeddings(item_pool, aux_dim=2)
+    dataset = QuantizerDataset(
+        interaction_data_path=interaction_frame,
+        max_seq_length=4,
+        min_seq_length=1,
+        textual_data_path=textual_frame,
+        lm_encoder=dummy_encoder,
+        aux_item_embeddings=aux_embeddings,
+    )
+
+    assert dataset.aux_item_embeddings is not None
+    np.testing.assert_allclose(dataset.aux_item_embeddings[1:], aux_embeddings[1:])
+    assert dataset.aux_embedding_dim == aux_embeddings.shape[1]
+
+    dataset_no_aux = QuantizerDataset(
+        interaction_data_path=interaction_frame,
+        max_seq_length=2,
+        min_seq_length=1,
+        textual_data_path=textual_frame,
+        lm_encoder=dummy_encoder,
+    )
+    assert dataset_no_aux.aux_item_embeddings is None
+    assert dataset_no_aux.aux_embedding_dim is None
 
 
 def test_genrec_dataset_examples(genrec_dataset, sid_cache, dummy_encoder):
@@ -353,6 +397,9 @@ def test_quantizer_dataset_and_collator(quantizer_dataset, dummy_encoder):
     assert len(quantizer_dataset) == quantizer_dataset.item_size
     example = quantizer_dataset[0]
     assert example.item_embedding.shape[0] == dummy_encoder.embedding_dim
+    assert example.aux_item_embedding is not None
+    assert example.aux_item_embedding.ndim == 1
+    aux_dim = example.aux_item_embedding.shape[0]
 
     collator = QuantizerCollator(quantizer_dataset)
     loader = DataLoader(quantizer_dataset, batch_size=4, collate_fn=collator)
@@ -361,6 +408,8 @@ def test_quantizer_dataset_and_collator(quantizer_dataset, dummy_encoder):
     assert batch["item_id"].shape == (4,)
     assert batch["item_embedding"].shape == (4, dummy_encoder.embedding_dim)
     assert batch["item_embedding"].dtype == torch.float32
+    assert batch["aux_item_embedding"].shape == (4, aux_dim)
+    assert batch["aux_item_embedding"].dtype == torch.float32
 
 
 def test_genrec_iter_split_requires_minimum_length_for_validation():
@@ -465,13 +514,14 @@ def test_large_scale_multiworker_uniform_negative_sampler():
         del loader
 
     encoder = DummyEncoder()
+    aux_embeddings = _make_aux_item_embeddings(item_pool, aux_dim=5)
     dataset = QuantizerDataset(
         interaction_data_path=interactions,
-        split=DatasetSplitLiteral.TRAIN,
         max_seq_length=4,
         min_seq_length=1,
         textual_data_path=textual,
         lm_encoder=encoder,
+        aux_item_embeddings=aux_embeddings,
     )
     assert len(dataset) == item_pool
     assert dataset.split == DatasetSplitLiteral.TRAIN
@@ -484,5 +534,10 @@ def test_large_scale_multiworker_uniform_negative_sampler():
         shuffle=False,
         multiprocessing_context="fork",
     )
-    _assert_quantizer_batches(loader, _expected_batch_sizes(len(dataset), batch_size), encoder.embedding_dim)
+    _assert_quantizer_batches(
+        loader,
+        _expected_batch_sizes(len(dataset), batch_size),
+        encoder.embedding_dim,
+        aux_embedding_dim=aux_embeddings.shape[1],
+    )
     del loader

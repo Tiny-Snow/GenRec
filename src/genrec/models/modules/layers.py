@@ -125,8 +125,8 @@ class SequentialTransductionUnit(GradientCheckpointingLayer):
         the model's capacity.
 
     References:
-        - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
-            Generative Recommendations. ICML '24.
+    - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
+        Generative Recommendations. ICML '24.
     """
 
     def __init__(
@@ -279,8 +279,8 @@ def spring_power_iteration(
         function should not be called in the checkpointed forward pass.
 
     References:
-        - Spectral Norm Regularization for Improving the Generalizability of Deep Learning. arXiv '17.
-        - Spectral Normalization for Generative Adversarial Networks. ICLR '18.
+    - Spectral Norm Regularization for Improving the Generalizability of Deep Learning. arXiv '17.
+    - Spectral Normalization for Generative Adversarial Networks. ICLR '18.
     """
     assert W.dim() == 2, "Input weight matrix must be 2-dimensional."
     m, n = W.shape
@@ -378,7 +378,7 @@ class SpringLlamaDecoderLayer(GradientCheckpointingLayer):
     See `LlamaDecoderLayer` for more details.
 
     References:
-        - ...
+    - ...
     """
 
     def __init__(
@@ -476,9 +476,9 @@ class SpringSequentialTransductionUnit(GradientCheckpointingLayer):
     See `SequentialTransductionUnit` for more details.
 
     References:
-        - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
-            Generative Recommendations. ICML '24.
-        - ...
+    - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
+        Generative Recommendations. ICML '24.
+    - ...
     """
 
     def __init__(

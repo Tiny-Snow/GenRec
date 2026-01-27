@@ -81,8 +81,8 @@ class RelativeBucketedTimeAndPositionAttentionBias(nn.Module):
     facilitating next-item prediction tasks.
 
     References:
-        - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
-            Generative Recommendations. ICML '24.
+    - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
+        Generative Recommendations. ICML '24.
     """
 
     def __init__(

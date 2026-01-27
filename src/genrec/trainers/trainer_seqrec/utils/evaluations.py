@@ -1,23 +1,95 @@
-"""Evaluation utilities for recommendation tasks."""
+"""Evaluation utilities for seqrec models."""
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, Protocol, Sequence, Tuple, Union
 
-import torch
 from jaxtyping import Int
+import numpy as np
+import torch
+from transformers import EvalPrediction
 
-from ...datasets import SeqRecDataset
+from ....datasets import SeqRecDataset
 
 __all__ = [
+    "SeqRecMetricFactory",
+    "SeqRecMetricFn",
     "calc_metric_hr",
     "calc_metric_ndcg",
     "calc_metric_popularity",
     "calc_metric_unpopularity",
     "clip_top_k",
-    "MetricFactory",
-    "MetricFn",
+    "compute_seqrec_metrics",
 ]
+
+
+def compute_seqrec_metrics(
+    prediction: EvalPrediction,
+    train_dataset: SeqRecDataset,
+    top_k: Sequence[int] = (1, 5, 10),
+    metrics: Sequence[Tuple[str, Dict[str, Any]]] = (
+        ("hr", {}),
+        ("ndcg", {}),
+        ("popularity", {"p": (0.1, 0.2)}),
+        ("unpopularity", {"p": (0.2, 0.4)}),
+    ),
+    device: Union[torch.device, str, None] = None,
+) -> Dict[str, float]:
+    """Compute metrics for sequential recommendation tasks.
+
+    Args:
+        prediction (EvalPrediction): Object containing model predictions and labels. Predictions are
+            expected to be the precomputed top-k item indices per user (shape: ``[num_users, max_k]``).
+        train_dataset (SeqRecDataset): Dataset used during training; required for global metrics
+            such as popularity-based measurements.
+        top_k (Sequence[int]): Cutoff values for computing top-K metrics, determining how many
+            predictions to consider for each metric. Default is (1, 5, 10).
+        metrics (Sequence[Tuple[str, Dict[str, Any]]]): Metric specifications, where each tuple
+            comprises the metric name and an optional parameter dictionary. Default is
+            [('hr', {}), ('ndcg', {}), ('popularity', {'p': (0.1, 0.2)}),
+            ('unpopularity', {'p': (0.2, 0.4)})].
+        device (Union[torch.device, str, None]): Device used for metric computations.
+            If None, defaults to CPU. Default is None.
+
+    Returns:
+        Dict[str, float]: Dictionary containing computed metric values keyed by metric name.
+
+    .. note::
+        As we may call this evaluation function for global metrics (e.g., popularity/fairness),
+        you should ensure the `train_dataset` is provided if any global metrics are specified.
+        In addition, `batch_eval_metrics` in `SeqRecTrainingArguments` should be set to `False`
+        to avoid conflicts.
+    """
+    torch_device = torch.device(device) if device is not None else torch.device("cpu")
+
+    topk_indices: Int[torch.Tensor, "B K"]
+    if isinstance(prediction.predictions, tuple):  # pragma: no cover - rarely used
+        topk_indices = torch.as_tensor(prediction.predictions[0], dtype=torch.long, device=torch_device)
+    else:
+        topk_indices = torch.as_tensor(prediction.predictions, dtype=torch.long, device=torch_device)
+
+    labels: Int[np.ndarray, "B L"]
+    if isinstance(prediction.label_ids, tuple):  # pragma: no cover - rarely used
+        labels = prediction.label_ids[0].astype(np.int64)
+    else:
+        labels = prediction.label_ids.astype(np.int64)
+    last_step_labels: Int[torch.Tensor, "B"]
+    last_step_labels = torch.as_tensor(labels[:, -1], dtype=torch.long, device=torch_device)
+
+    results: Dict[str, float] = {}
+    for k in top_k:
+        sliced_topk_indices = topk_indices[:, :k]
+        for metric_name, metric_params in metrics:
+            metric_fn = SeqRecMetricFactory.create(metric_name)
+            metric_results = metric_fn(
+                topk_indices=sliced_topk_indices,
+                labels=last_step_labels,
+                train_dataset=train_dataset,
+                **metric_params,
+            )
+            results.update(metric_results)
+
+    return results
 
 
 def clip_top_k(top_k: Sequence[int], item_size: int) -> Tuple[int, ...]:
@@ -26,8 +98,8 @@ def clip_top_k(top_k: Sequence[int], item_size: int) -> Tuple[int, ...]:
     return tuple(sorted(top_k_set))
 
 
-class MetricFn(Protocol):  # pragma: no cover - protocol
-    """Protocol for metric functions."""
+class SeqRecMetricFn(Protocol):  # pragma: no cover - protocol
+    """Protocol for seqrec metric functions."""
 
     def __call__(
         self,
@@ -51,16 +123,16 @@ class MetricFn(Protocol):  # pragma: no cover - protocol
         ...
 
 
-class MetricFactory:  # pragma: no cover - factory class
-    """Factory for creating metric functions."""
+class SeqRecMetricFactory:  # pragma: no cover - factory class
+    """Factory for creating seqrec metric functions."""
 
-    _registry: dict[str, MetricFn] = {}
+    _registry: dict[str, SeqRecMetricFn] = {}
 
     @classmethod
-    def register(cls, name: str) -> Callable[[MetricFn], MetricFn]:
+    def register(cls, name: str) -> Callable[[SeqRecMetricFn], SeqRecMetricFn]:
         """Decorator to register a metric function."""
 
-        def decorator(fn: MetricFn) -> MetricFn:
+        def decorator(fn: SeqRecMetricFn) -> SeqRecMetricFn:
             if name in cls._registry:
                 raise ValueError(f"Metric '{name}' is already registered.")
             cls._registry[name] = fn
@@ -69,7 +141,7 @@ class MetricFactory:  # pragma: no cover - factory class
         return decorator
 
     @classmethod
-    def create(cls, name: str) -> MetricFn:
+    def create(cls, name: str) -> SeqRecMetricFn:
         """Create a metric function by name."""
         if name not in cls._registry:
             raise ValueError(f"Metric '{name}' is not registered.")
@@ -77,7 +149,7 @@ class MetricFactory:  # pragma: no cover - factory class
         return metric_fn
 
 
-@MetricFactory.register("hr")
+@SeqRecMetricFactory.register("hr")
 def calc_metric_hr(
     topk_indices: Int[torch.Tensor, "B K"],
     labels: Int[torch.Tensor, "B"],
@@ -101,7 +173,7 @@ def calc_metric_hr(
     return {f"hr@{K}": hr}
 
 
-@MetricFactory.register("ndcg")
+@SeqRecMetricFactory.register("ndcg")
 def calc_metric_ndcg(
     topk_indices: Int[torch.Tensor, "B K"],
     labels: Int[torch.Tensor, "B"],
@@ -127,7 +199,7 @@ def calc_metric_ndcg(
     return {f"ndcg@{K}": ndcg}
 
 
-@MetricFactory.register("popularity")
+@SeqRecMetricFactory.register("popularity")
 def calc_metric_popularity(
     topk_indices: Int[torch.Tensor, "B K"],
     labels: Int[torch.Tensor, "B"],
@@ -165,7 +237,7 @@ def calc_metric_popularity(
     return results
 
 
-@MetricFactory.register("unpopularity")
+@SeqRecMetricFactory.register("unpopularity")
 def calc_metric_unpopularity(
     topk_indices: Int[torch.Tensor, "B K"],
     labels: Int[torch.Tensor, "B"],

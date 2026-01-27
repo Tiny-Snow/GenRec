@@ -75,7 +75,7 @@ class SASRecModel(SeqRecModel[SASRecModelConfig, SASRecModelOutput]):
     implementations in Llama model.
 
     References:
-        - Self-Attentive Sequential Recommendation. ICDM '18.
+    - Self-Attentive Sequential Recommendation. ICDM '18.
     """
 
     config_class = SASRecModelConfig

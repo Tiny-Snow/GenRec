@@ -59,7 +59,7 @@ class SLD2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLD2LRSeqRecTrainingArgume
     Softmax Loss. To stabilize training, we apply a temperature parameter to the IPS weights.
 
     References:
-        - Dual Debiasing in LLM-based Recommendation. SIGIR '25.
+    - Dual Debiasing in LLM-based Recommendation. SIGIR '25.
     """
 
     args: SLD2LRSeqRecTrainingArguments

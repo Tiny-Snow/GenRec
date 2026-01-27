@@ -1,7 +1,7 @@
 import pytest
 from transformers import TrainerControl, TrainerState, TrainingArguments
 
-from genrec.trainers.utils.callbacks import EpochIntervalEvalCallback, HardStopCallback
+from genrec.trainers.trainer_seqrec.utils.callbacks import EpochIntervalEvalCallback, HardStopCallback
 
 
 def _build_state(epoch):

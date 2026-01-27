@@ -7,8 +7,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, Tuple, Type, TypeVar, Union
 
-from jaxtyping import Float, Int
-import numpy as np
+from jaxtyping import Float
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,11 +15,10 @@ from transformers import EvalPrediction, Trainer, TrainerCallback, TrainingArgum
 
 from ...datasets import SeqRecCollator, SeqRecDataset
 from ...models import SeqRecModel, SeqRecOutput
-from ..utils.callbacks import EpochIntervalEvalCallback, HardStopCallback
-from ..utils.evaluations import MetricFactory, clip_top_k
+from .utils.callbacks import EpochIntervalEvalCallback, HardStopCallback
+from .utils.evaluations import clip_top_k, compute_seqrec_metrics
 
 __all__ = [
-    "compute_seqrec_metrics",
     "SeqRecTrainer",
     "SeqRecTrainerFactory",
     "SeqRecTrainingArguments",
@@ -61,52 +59,6 @@ class SeqRecTrainingArgumentsFactory:  # pragma: no cover - factory class
         return training_args_cls(**kwargs)
 
 
-class SeqRecTrainerFactory:  # pragma: no cover - factory class
-    """Factory for creating `SeqRecTrainer` instances."""
-
-    _registry: dict[str, Type[SeqRecTrainer[Any, Any]]] = {}
-
-    @classmethod
-    def register(cls, name: str) -> Callable[[Type[_SeqRecTrainer]], Type[_SeqRecTrainer]]:
-        """Decorator to register a `SeqRecTrainer` implementation."""
-
-        def decorator(trainer_cls: Type[_SeqRecTrainer]) -> Type[_SeqRecTrainer]:
-            if name in cls._registry:
-                raise ValueError(f"SeqRec trainer '{name}' is already registered.")
-            cls._registry[name] = trainer_cls
-            return trainer_cls
-
-        return decorator
-
-    @classmethod
-    def create(
-        cls,
-        name: str,
-        model: SeqRecModel[Any, Any],
-        args: SeqRecTrainingArguments,
-        data_collator: SeqRecCollator,
-        train_dataset: SeqRecDataset,
-        eval_dataset: Optional[SeqRecDataset] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        callbacks: Optional[List[TrainerCallback]] = None,
-        **kwargs,
-    ) -> SeqRecTrainer[Any, Any]:
-        """Creates an instance of a registered `SeqRecTrainer`."""
-        if name not in cls._registry:
-            raise ValueError(f"SeqRec trainer '{name}' is not registered.")
-        trainer_cls = cls._registry[name]
-        return trainer_cls(
-            model=model,
-            args=args,
-            data_collator=data_collator,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            compute_metrics=compute_metrics,
-            callbacks=callbacks,
-            **kwargs,
-        )
-
-
 @dataclass
 class SeqRecTrainingArguments(TrainingArguments):
     """Training arguments for sequential recommendation trainers.
@@ -116,6 +68,7 @@ class SeqRecTrainingArguments(TrainingArguments):
             computation and evaluation. If True, both user and item embeddings are normalized to
             unit length, and the dot product is equivalent to cosine similarity. Default is False.
         eval_interval (int): Number of epochs between each evaluation. Default is 5.
+        train_stop_epoch (int): Number of epochs to stop training. Default is -1 (no early stop).
         metrics (Sequence[Tuple[str, Dict[str, Any]]]): Metric names and their parameters to
             compute during evaluation. Default is [('hr', {}), ('ndcg', {}), ('popularity', {'p': (0.1, 0.2)}),
             ("unpopularity", {"p": (0.2, 0.4)})].
@@ -175,73 +128,50 @@ class SeqRecTrainingArguments(TrainingArguments):
     )
 
 
-def compute_seqrec_metrics(
-    prediction: EvalPrediction,
-    train_dataset: SeqRecDataset,
-    top_k: Sequence[int] = (1, 5, 10),
-    metrics: Sequence[Tuple[str, Dict[str, Any]]] = (
-        ("hr", {}),
-        ("ndcg", {}),
-        ("popularity", {"p": (0.1, 0.2)}),
-        ("unpopularity", {"p": (0.2, 0.4)}),
-    ),
-    device: Union[torch.device, str, None] = None,
-) -> Dict[str, float]:
-    """Compute metrics for sequential recommendation tasks.
+class SeqRecTrainerFactory:  # pragma: no cover - factory class
+    """Factory for creating `SeqRecTrainer` instances."""
 
-    Args:
-        prediction (EvalPrediction): Object containing model predictions and labels. Predictions are
-            expected to be the precomputed top-k item indices per user (shape: ``[num_users, max_k]``).
-        train_dataset (SeqRecDataset): Dataset used during training; required for global metrics
-            such as popularity-based measurements.
-        top_k (Sequence[int]): Cutoff values for computing top-K metrics, determining how many
-            predictions to consider for each metric. Default is (1, 5, 10).
-        metrics (Sequence[Tuple[str, Dict[str, Any]]]): Metric specifications, where each tuple
-            comprises the metric name and an optional parameter dictionary. Default is
-            [('hr', {}), ('ndcg', {}), ('popularity', {'p': (0.1, 0.2)}),
-            ('unpopularity', {'p': (0.2, 0.4)})].
-        device (Union[torch.device, str, None]): Device used for metric computations.
-            If None, defaults to CPU. Default is None.
+    _registry: dict[str, Type[SeqRecTrainer[Any, Any]]] = {}
 
-    Returns:
-        Dict[str, float]: Dictionary containing computed metric values keyed by metric name.
+    @classmethod
+    def register(cls, name: str) -> Callable[[Type[_SeqRecTrainer]], Type[_SeqRecTrainer]]:
+        """Decorator to register a `SeqRecTrainer` implementation."""
 
-    .. note::
-        As we may call this evaluation function for global metrics (e.g., popularity/fairness),
-        you should ensure the `train_dataset` is provided if any global metrics are specified.
-        In addition, `batch_eval_metrics` in `SeqRecTrainingArguments` should be set to `False`
-        to avoid conflicts.
-    """
-    torch_device = torch.device(device) if device is not None else torch.device("cpu")
+        def decorator(trainer_cls: Type[_SeqRecTrainer]) -> Type[_SeqRecTrainer]:
+            if name in cls._registry:
+                raise ValueError(f"SeqRec trainer '{name}' is already registered.")
+            cls._registry[name] = trainer_cls
+            return trainer_cls
 
-    topk_indices: Int[torch.Tensor, "B K"]
-    if isinstance(prediction.predictions, tuple):  # pragma: no cover - rarely used
-        topk_indices = torch.as_tensor(prediction.predictions[0], dtype=torch.long, device=torch_device)
-    else:
-        topk_indices = torch.as_tensor(prediction.predictions, dtype=torch.long, device=torch_device)
+        return decorator
 
-    labels: Int[np.ndarray, "B L"]
-    if isinstance(prediction.label_ids, tuple):  # pragma: no cover - rarely used
-        labels = prediction.label_ids[0].astype(np.int64)
-    else:
-        labels = prediction.label_ids.astype(np.int64)
-    last_step_labels: Int[torch.Tensor, "B"]
-    last_step_labels = torch.as_tensor(labels[:, -1], dtype=torch.long, device=torch_device)
-
-    results: Dict[str, float] = {}
-    for k in top_k:
-        sliced_topk_indices = topk_indices[:, :k]
-        for metric_name, metric_params in metrics:
-            metric_fn = MetricFactory.create(metric_name)
-            metric_results = metric_fn(
-                topk_indices=sliced_topk_indices,
-                labels=last_step_labels,
-                train_dataset=train_dataset,
-                **metric_params,
-            )
-            results.update(metric_results)
-
-    return results
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        model: SeqRecModel[Any, Any],
+        args: SeqRecTrainingArguments,
+        data_collator: SeqRecCollator,
+        train_dataset: SeqRecDataset,
+        eval_dataset: Optional[SeqRecDataset] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        callbacks: Optional[List[TrainerCallback]] = None,
+        **kwargs,
+    ) -> SeqRecTrainer[Any, Any]:
+        """Creates an instance of a registered `SeqRecTrainer`."""
+        if name not in cls._registry:
+            raise ValueError(f"SeqRec trainer '{name}' is not registered.")
+        trainer_cls = cls._registry[name]
+        return trainer_cls(
+            model=model,
+            args=args,
+            data_collator=data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+            **kwargs,
+        )
 
 
 class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], ABC):
@@ -337,7 +267,7 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         return_outputs: bool = False,
         num_items_in_batch: Optional[torch.Tensor] = None,
     ) -> Union[Float[torch.Tensor, ""], Tuple[Float[torch.Tensor, ""], Dict[str, torch.Tensor]]]:
-        """Computes the loss for a batch of inputs. This should be overridden by all subclasses.
+        """Computes the loss for a batch of inputs.
 
         Args:
             model (nn.Module): Model being trained.
@@ -401,6 +331,7 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         norm_embeddings: bool = False,
     ) -> Float[torch.Tensor, ""]:
         """Computes the recommendation loss for a batch of inputs and model outputs.
+        This should be implemented by all subclasses.
 
         Args:
             inputs (dict[str, Union[torch.Tensor, Any]]): Dictionary of input tensors, i.e., the

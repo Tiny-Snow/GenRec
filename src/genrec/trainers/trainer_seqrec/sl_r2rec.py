@@ -74,7 +74,7 @@ class SLR2RecSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLR2RecSeqRecTrainingArgu
     temperature parameter is applied to the reweighting factors.
 
     References:
-        - Reembedding and Reweighting are Needed for Tail Item Sequential Recommendation. WWW '25.
+    - Reembedding and Reweighting are Needed for Tail Item Sequential Recommendation. WWW '25.
     """
 
     args: SLR2RecSeqRecTrainingArguments

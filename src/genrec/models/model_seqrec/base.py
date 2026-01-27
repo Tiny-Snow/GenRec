@@ -54,6 +54,90 @@ class SeqRecModelConfigFactory:  # pragma: no cover - factory class
         return config_cls(**kwargs)
 
 
+class SeqRecModelConfig(PretrainedConfig):
+    """Base configuration class for sequential recommendation models.
+
+    This class extends the `PretrainedConfig` from the Hugging Face Transformers library
+    and serves as a base for implementing specific sequential recommendation model configurations.
+
+    Subclasses must specify the `model_type` attribute.
+    """
+
+    model_type = "seqrec"
+
+    def __init__(
+        self,
+        item_size: int = 1024,
+        hidden_size: int = 256,
+        num_attention_heads: int = 4,
+        num_hidden_layers: int = 4,
+        **kwargs,
+    ) -> None:
+        """Initializes the configuration with model hyperparameters.
+
+        Args:
+            item_size (int): Size of the item vocabulary, excluding the padding token (0-th). Default is 1024.
+            hidden_size (int): Dimensionality of the model's hidden representations. Default is 256.
+            num_attention_heads (int): Number of attention heads in the model. Default is 4.
+            num_hidden_layers (int): Number of hidden layers in the model. Default is 4.
+            **kwargs (Any): Additional keyword arguments for the base `PretrainedConfig`.
+        """
+        super().__init__(**kwargs)
+
+        self.item_size = item_size
+        self.hidden_size = hidden_size
+        self.num_attention_heads = num_attention_heads
+        self.num_hidden_layers = num_hidden_layers
+
+
+class SeqRecOutputFactory:  # pragma: no cover - factory class
+    """Factory for creating `SeqRecOutput` instances."""
+
+    _registry: dict[str, Type[SeqRecOutput]] = {}
+
+    @classmethod
+    def register(cls, name: str) -> Callable[[Type[_SeqRecOutput]], Type[_SeqRecOutput]]:
+        """Decorator to register a `SeqRecOutput` implementation."""
+
+        def decorator(output_cls: Type[_SeqRecOutput]) -> Type[_SeqRecOutput]:
+            if name in cls._registry:
+                raise ValueError(f"SeqRec output '{name}' is already registered.")
+            cls._registry[name] = output_cls
+            return output_cls
+
+        return decorator
+
+    @classmethod
+    def create(cls, name: str, **kwargs) -> SeqRecOutput:
+        """Creates an instance of a registered `SeqRecOutput`."""
+        if name not in cls._registry:
+            raise ValueError(f"SeqRec output '{name}' is not registered.")
+        output_cls = cls._registry[name]
+        return output_cls(**kwargs)
+
+
+@dataclass
+class SeqRecOutput(ModelOutput):
+    """Base output class for sequential recommendation models.
+
+    Attributes:
+        last_hidden_state (Float[torch.Tensor, "B L d"]): Hidden states from the
+            last layer of the model. The shape is (batch_size, seq_len, hidden_size).
+        model_loss (Optional[Float[torch.Tensor, ""]]): The computed model-specific
+            loss value, if applicable. Note that the model-agnostic loss (e.g., NLL loss)
+            is handled outside of this class.
+        hidden_states (Optional[Tuple[Float[torch.Tensor, "B L d"], ...]]): Hidden states
+            from the model, if applicable. The shape is (batch_size, seq_len, hidden_size).
+        attentions (Optional[Tuple[Float[torch.Tensor, "B H L L"], ...]]): Attention weights
+            from the model, if applicable. The shape is (batch_size, num_heads, seq_len, seq_len).
+    """
+
+    last_hidden_state: Float[torch.Tensor, "B L d"]
+    model_loss: Optional[Float[torch.Tensor, ""]] = None
+    hidden_states: Optional[Tuple[Float[torch.Tensor, "B L d"], ...]] = None
+    attentions: Optional[Tuple[Float[torch.Tensor, "B H L L"], ...]] = None
+
+
 class SeqRecModelFactory:  # pragma: no cover - factory class
     """Factory for creating `SeqRecModel` instances."""
 
@@ -86,90 +170,6 @@ class SeqRecModelFactory:  # pragma: no cover - factory class
             raise ValueError(f"SeqRec model '{name}' is not registered.")
         model_cls = cls._registry[name]
         return model_cls.from_pretrained(path, **kwargs)
-
-
-class SeqRecOutputFactory:  # pragma: no cover - factory class
-    """Factory for creating `SeqRecOutput` instances."""
-
-    _registry: dict[str, Type[SeqRecOutput]] = {}
-
-    @classmethod
-    def register(cls, name: str) -> Callable[[Type[_SeqRecOutput]], Type[_SeqRecOutput]]:
-        """Decorator to register a `SeqRecOutput` implementation."""
-
-        def decorator(output_cls: Type[_SeqRecOutput]) -> Type[_SeqRecOutput]:
-            if name in cls._registry:
-                raise ValueError(f"SeqRec output '{name}' is already registered.")
-            cls._registry[name] = output_cls
-            return output_cls
-
-        return decorator
-
-    @classmethod
-    def create(cls, name: str, **kwargs) -> SeqRecOutput:
-        """Creates an instance of a registered `SeqRecOutput`."""
-        if name not in cls._registry:
-            raise ValueError(f"SeqRec output '{name}' is not registered.")
-        output_cls = cls._registry[name]
-        return output_cls(**kwargs)
-
-
-class SeqRecModelConfig(PretrainedConfig):
-    """Base configuration class for sequential recommendation models.
-
-    This class extends the `PretrainedConfig` from the Hugging Face Transformers library
-    and serves as a base for implementing specific sequential recommendation model configurations.
-
-    Subclasses must specify the `model_type` attribute.
-    """
-
-    model_type = "seqrec"
-
-    def __init__(
-        self,
-        item_size: int = 1024,
-        hidden_size: int = 256,
-        num_attention_heads: int = 4,
-        num_hidden_layers: int = 4,
-        **kwargs,
-    ) -> None:
-        """Initializes the configuration with model hyperparameters.
-
-        Args:
-            item_size (int): Size of the item vocabulary, excluding the padding token (0-th).
-            hidden_size (int): Dimensionality of the model's hidden representations.
-            num_attention_heads (int): Number of attention heads in the model.
-            num_hidden_layers (int): Number of hidden layers in the model.
-            **kwargs (Any): Additional keyword arguments for the base `PretrainedConfig`.
-        """
-        super().__init__(**kwargs)
-
-        self.item_size = item_size
-        self.hidden_size = hidden_size
-        self.num_attention_heads = num_attention_heads
-        self.num_hidden_layers = num_hidden_layers
-
-
-@dataclass
-class SeqRecOutput(ModelOutput):
-    """Base output class for sequential recommendation models.
-
-    Attributes:
-        last_hidden_state: Hidden states from the last layer of the model.
-            The shape is (batch_size, seq_len, hidden_size).
-        model_loss: The computed model-specific loss value, if applicable.
-            Note that the model-agnostic loss (e.g., NLL loss) is handled outside
-            of this class.
-        hidden_states: Hidden states from the model, if applicable. The shape is
-            (batch_size, seq_len, hidden_size).
-        attentions: Attention weights from the model, if applicable. The shape is
-            (batch_size, num_heads, seq_len, seq_len).
-    """
-
-    last_hidden_state: Float[torch.Tensor, "B L d"]
-    model_loss: Optional[Float[torch.Tensor, ""]] = None
-    hidden_states: Optional[Tuple[Float[torch.Tensor, "B L d"], ...]] = None
-    attentions: Optional[Tuple[Float[torch.Tensor, "B H L L"], ...]] = None
 
 
 class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], ABC):

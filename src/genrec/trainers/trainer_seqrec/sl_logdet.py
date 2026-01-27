@@ -68,7 +68,7 @@ class SLLogDetSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLLogDetSeqRecTrainingAr
         MSE loss, is replaced with the standard SL loss for recommendation.
 
     References:
-        - Mitigating the Popularity Bias of Graph Collaborative Filtering: A Dimensional Collapse Perspective. NeurIPS '23.
+    - Mitigating the Popularity Bias of Graph Collaborative Filtering: A Dimensional Collapse Perspective. NeurIPS '23.
     """
 
     args: SLLogDetSeqRecTrainingArguments

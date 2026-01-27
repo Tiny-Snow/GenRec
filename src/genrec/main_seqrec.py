@@ -36,11 +36,11 @@ import pickle
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, cast
 
-import yaml
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 from rich import print_json
 from transformers.utils import logging
+import yaml
 
 from .datasets import DatasetSplitLiteral, SeqRecCollator, SeqRecCollatorConfig, SeqRecDataset
 from .models import SeqRecModel, SeqRecModelConfigFactory, SeqRecModelFactory

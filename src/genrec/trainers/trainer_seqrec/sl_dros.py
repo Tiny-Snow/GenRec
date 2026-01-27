@@ -74,7 +74,7 @@ class SLDROSSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLDROSSeqRecTrainingArgume
         MSE loss. We have fixed these issues in this implementation.
 
     References:
-        - A Generic Learning Framework for Sequential Recommendation with Distribution Shifts. SIGIR '23.
+    - A Generic Learning Framework for Sequential Recommendation with Distribution Shifts. SIGIR '23.
     """
 
     args: SLDROSSeqRecTrainingArguments

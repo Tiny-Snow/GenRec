@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Protocol, Sequence, Type, runtime_checkable
+from typing import Callable, Optional, Protocol, Sequence, Type, Union, runtime_checkable
 
 from jaxtyping import Float
 import numpy as np
@@ -68,8 +68,8 @@ class SentenceT5Encoder:
     def __init__(
         self,
         model_name: str = "sentence-transformers/sentence-t5-base",
-        device: str | None = None,
-        local_model_dir: str | None = None,
+        device: Optional[str] = None,
+        local_model_dir: Optional[Union[str, Path]] = None,
         allow_download: bool = True,
     ) -> None:
         """Initialises the encoder.
@@ -78,8 +78,8 @@ class SentenceT5Encoder:
             model_name (str): Hugging Face identifier for the model to load when a local directory
                 is not provided.
             device (Optional[str]): Optional device string forwarded to SentenceTransformers.
-            local_model_dir (Optional[str]): Directory containing a cached model or to be used as
-                a cache location.
+            local_model_dir (Optional[Union[str, Path]]): Directory containing a cached model or to
+                be used as a cache location.
             allow_download (bool): Whether to download the model if `local_model_dir` does not
                 exist yet.
 
@@ -89,8 +89,8 @@ class SentenceT5Encoder:
         """
         model_source = model_name
 
-        self._model_dir: Path | None = None
-        cache_folder: str | None = None
+        self._model_dir: Optional[Path] = None
+        cache_folder: Optional[str] = None
         if local_model_dir is not None:
             resolved_dir = Path(local_model_dir).expanduser().resolve()
             self._model_dir = resolved_dir

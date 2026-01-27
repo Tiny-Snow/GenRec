@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import copy
+from typing import List
+
 from jaxtyping import Float
 import torch
 import torch.nn as nn
 
 __all__ = [
     "FeedForwardNetwork",
+    "MLP",
     "SwiGLU",
 ]
 
@@ -46,6 +50,47 @@ class FeedForwardNetwork(nn.Module):
             Float[torch.Tensor, "... d"]: Output tensor of shape (..., hidden_size).
         """
         return self.fc2(self.act_fn(self.fc1(x)))
+
+
+class MLP(nn.Module):
+    """Multi-Layer Perceptron (MLP)."""
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_sizes: List[int],
+        output_size: int,
+        activation: nn.Module = nn.ReLU(),
+        ffn_bias: bool = False,
+    ) -> None:
+        """Initializes MLP module.
+
+        Args:
+            input_size (int): Dimensionality of the input.
+            hidden_sizes (List[int]): List of hidden layer sizes.
+            output_size (int): Dimensionality of the output.
+            activation (nn.Module): Activation function to use between layers. Default is ReLU.
+            ffn_bias (bool): Whether to include bias terms in the linear projections. Default is False.
+        """
+        super().__init__()
+        layer_sizes = [input_size] + hidden_sizes + [output_size]
+        layers = []
+        for i in range(len(layer_sizes) - 1):
+            layers.append(nn.Linear(layer_sizes[i], layer_sizes[i + 1], bias=ffn_bias))
+            if i < len(layer_sizes) - 2:
+                layers.append(copy.deepcopy(activation))
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, x: Float[torch.Tensor, "... d"]) -> Float[torch.Tensor, "... d"]:
+        """Forward pass for MLP.
+
+        Args:
+            x (Float[torch.Tensor, "... d"]): Input tensor of shape (..., input_size).
+
+        Returns:
+            Float[torch.Tensor, "... d"]: Output tensor of shape (..., output_size).
+        """
+        return self.network(x)
 
 
 class SwiGLU(nn.Module):

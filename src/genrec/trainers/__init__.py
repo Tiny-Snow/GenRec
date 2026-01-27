@@ -6,9 +6,19 @@ __all__ = []
 
 __all__ += []
 
-# from .trainer_quantizer import ...
+from .trainer_quantizer import (
+    QuantizerTrainer,
+    QuantizerTrainerFactory,
+    QuantizerTrainingArguments,
+    QuantizerTrainingArgumentsFactory,
+)
 
-__all__ += []
+__all__ += [
+    "QuantizerTrainer",
+    "QuantizerTrainerFactory",
+    "QuantizerTrainingArguments",
+    "QuantizerTrainingArgumentsFactory",
+]
 
 from .trainer_seqrec import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, SeqRecTrainingArgumentsFactory
 
