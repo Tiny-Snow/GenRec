@@ -1,4 +1,4 @@
-"""Callbacks for trainers."""
+"""Callbacks for seqrec trainers."""
 
 from __future__ import annotations
 

@@ -9,7 +9,7 @@ Expected configuration schema::
     save_predictions: false  # whether to save the predictions on the test set
     dataset:
         type: seqrec
-        interaction_data_path: data/movielens/train.parquet
+        interaction_data_path: /path/to/movielens-1m/proc/user2item.pkl
         ...  # dataset-specific parameters
     collator:
         type: seqrec
@@ -36,11 +36,11 @@ import pickle
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, cast
 
-import yaml
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 from rich import print_json
 from transformers.utils import logging
+import yaml
 
 from .datasets import DatasetSplitLiteral, SeqRecCollator, SeqRecCollatorConfig, SeqRecDataset
 from .models import SeqRecModel, SeqRecModelConfigFactory, SeqRecModelFactory

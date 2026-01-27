@@ -91,9 +91,9 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
     as the `model_loss` in the `HSTUSpringModelOutput`.
 
     References:
-        - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
-            Generative Recommendations. ICML '24.
-        - ...
+    - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
+        Generative Recommendations. ICML '24.
+    - ...
     """
 
     config_class = HSTUSpringModelConfig

@@ -10,6 +10,8 @@ __pycache__/
 # Data, scripts & artifacts
 data
 data/
+.hf-models
+.hf-models/
 outputs/
 logs/
 scripts_running/

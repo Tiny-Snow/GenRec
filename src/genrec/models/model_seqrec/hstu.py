@@ -118,8 +118,8 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
         original STU design, to enhance the model's capacity.
 
     References:
-        - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
-            Generative Recommendations. ICML '24.
+    - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
+        Generative Recommendations. ICML '24.
     """
 
     config_class = HSTUModelConfig

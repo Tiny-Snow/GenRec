@@ -13,8 +13,8 @@ from .layernorm import RMSNorm
 from .posemb import RelativeBucketedTimeAndPositionAttentionBias, apply_rotary_pos_emb
 
 __all__ = [
-    "MaskedSelfAttentionWithRoPE",
     "MaskedHSTUAttention",
+    "MaskedSelfAttentionWithRoPE",
 ]
 
 
@@ -125,8 +125,8 @@ class MaskedHSTUAttention(nn.Module):
         computation, which can be beneficial in certain scenarios where gating may not be stable.
 
     References:
-        - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
-            Generative Recommendations. ICML '24.
+    - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
+        Generative Recommendations. ICML '24.
     """
 
     def __init__(

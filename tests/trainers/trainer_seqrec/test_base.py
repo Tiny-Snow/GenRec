@@ -13,8 +13,8 @@ from transformers import EvalPrediction
 
 from genrec.models.model_seqrec.base import SeqRecModelConfig
 from genrec.trainers.trainer_seqrec.base import compute_seqrec_metrics
-from genrec.trainers.utils.evaluations import clip_top_k
-from genrec.trainers.utils.callbacks import EpochIntervalEvalCallback
+from genrec.trainers.trainer_seqrec.utils.evaluations import clip_top_k
+from genrec.trainers.trainer_seqrec.utils.callbacks import EpochIntervalEvalCallback
 from tests.trainers.trainer_seqrec.helpers import (
     DummySeqRecCollator,
     DummySeqRecDataset,

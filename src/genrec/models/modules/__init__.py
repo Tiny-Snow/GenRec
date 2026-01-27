@@ -9,10 +9,11 @@ __all__ += [
     "MaskedSelfAttentionWithRoPE",
 ]
 
-from .feedforward import FeedForwardNetwork, SwiGLU
+from .feedforward import FeedForwardNetwork, MLP, SwiGLU
 
 __all__ += [
     "FeedForwardNetwork",
+    "MLP",
     "SwiGLU",
 ]
 

@@ -44,7 +44,7 @@ class BCED2LRSeqRecTrainer(SeqRecTrainer[_SeqRecModel, BCED2LRSeqRecTrainingArgu
     weights.
 
     References:
-        - Dual Debiasing in LLM-based Recommendation. SIGIR '25.
+    - Dual Debiasing in LLM-based Recommendation. SIGIR '25.
     """
 
     args: BCED2LRSeqRecTrainingArguments

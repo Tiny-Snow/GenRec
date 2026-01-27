@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from jaxtyping import Float, Int
+from jaxtyping import Int
 import numpy as np
 import pandas as pd
 
@@ -67,7 +67,26 @@ class SeqRecDataset(RecDataset[SeqRecExample]):
         sid_cache: Optional[Int[np.ndarray, "I+1 C"]] = None,
         textual_data_path: Optional[Union[pd.DataFrame, str, Path]] = None,
         lm_encoder: Optional[LMEncoder] = None,
+        **kwargs: Any,
     ) -> None:
+        """Initialises the dataset and materialises user-level metadata.
+
+        Args:
+            interaction_data_path (Union[pd.DataFrame, str, Path]): Pandas DataFrame or path to a
+                pickle file containing `UserID` and `ItemID` columns. We assume that the `UserID`
+                begins from 0 and that `ItemID` begins from 1, both being contiguous integers. The
+                `ItemID` of 0 is reserved for padding.
+            split (DatasetSplitLiteral): Dataset split controlling example generation strategy.
+            max_seq_length (int): Maximum length of interaction histories.
+            min_seq_length (int): Minimum length of interaction histories.
+            sid_cache (Optional[Int[np.ndarray, "I+1 C"]]): Optional mapping from item ID to SID
+                sequence, stored as numpy arrays.
+            textual_data_path (Optional[Union[pd.DataFrame, str, Path]]): Optional DataFrame or
+                pickle file with `ItemID` and `Title` columns.
+            lm_encoder (Optional[LMEncoder]): Optional encoder used to transform item titles into
+                dense embeddings.
+            **kwargs (Any): Additional keyword arguments for the dataset.
+        """
         super().__init__(
             interaction_data_path,
             split,
@@ -76,6 +95,7 @@ class SeqRecDataset(RecDataset[SeqRecExample]):
             sid_cache,
             textual_data_path,
             lm_encoder,
+            **kwargs,
         )
         # recompute training set item popularity
         self._train_item_popularity = self._compute_train_item_popularity()
@@ -188,6 +208,7 @@ class SeqRecCollator(RecCollator[SeqRecExample]):
         dataset: SeqRecDataset,
         config: Optional[SeqRecCollatorConfig] = None,
         seed: int = 42,
+        **kwargs: Any,
     ) -> None:
         """Configures the collator.
 
@@ -224,7 +245,7 @@ class SeqRecCollator(RecCollator[SeqRecExample]):
             "attention_mask": np.int64(0),
         }
 
-        super().__init__(need_pad_keys, no_pad_keys, pad_values, seed)
+        super().__init__(need_pad_keys, no_pad_keys, pad_values, seed, **kwargs)
 
     def _process_before_padding(
         self,

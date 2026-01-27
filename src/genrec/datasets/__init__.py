@@ -52,3 +52,13 @@ __all__ += [
     "SeqRecDataset",
     "SeqRecExample",
 ]
+
+from .modules import LMEncoder, LMEncoderFactory, NegativeSampler, NegativeSamplerFactory, PrefixTree
+
+__all__ += [
+    "LMEncoder",
+    "LMEncoderFactory",
+    "NegativeSampler",
+    "NegativeSamplerFactory",
+    "PrefixTree",
+]

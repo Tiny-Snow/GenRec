@@ -51,7 +51,7 @@ class SLSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLSeqRecTrainingArguments]):
     which is commonly used in sequential recommendation tasks.
 
     References:
-        - PSL: Rethinking and Improving Softmax Loss from Pairwise Perspective for Recommendation. NeurIPS '24.
+    - PSL: Rethinking and Improving Softmax Loss from Pairwise Perspective for Recommendation. NeurIPS '24.
     """
 
     args: SLSeqRecTrainingArguments

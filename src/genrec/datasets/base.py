@@ -171,6 +171,7 @@ class RecDataset(Dataset[_RecExample], Generic[_RecExample], ABC):
         sid_cache: Optional[Int[np.ndarray, "I+1 C"]] = None,
         textual_data_path: Optional[Union[pd.DataFrame, str, Path]] = None,
         lm_encoder: Optional[LMEncoder] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialises the dataset and materialises user-level metadata.
 
@@ -188,6 +189,7 @@ class RecDataset(Dataset[_RecExample], Generic[_RecExample], ABC):
                 pickle file with `ItemID` and `Title` columns.
             lm_encoder (Optional[LMEncoder]): Optional encoder used to transform item titles into
                 dense embeddings.
+            **kwargs (Any): Additional keyword arguments for the dataset.
         """
         if split not in {
             "train",
@@ -489,6 +491,7 @@ class RecCollator(Generic[_RecExample], SeedWorkerMixin):
         no_pad_keys: Dict[str, type],
         pad_values: Dict[str, np.generic],
         seed: int = 42,
+        **kwargs: Any,
     ) -> None:
         """Configures the collator.
 
@@ -498,6 +501,7 @@ class RecCollator(Generic[_RecExample], SeedWorkerMixin):
             pad_values (Dict[str, np.generic]): Padding values per field, e.g., {"field1": 0,
                 "field2": -100}. If a field is missing, defaults to 0.
             seed (int): Random seed for the collator's internal RNG.
+            **kwargs (Any): Additional keyword arguments for the collator.
         """
         SeedWorkerMixin.__init__(self, global_seed=seed)
 

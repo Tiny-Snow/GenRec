@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 import torch
 
-from genrec.trainers.utils.evaluations import (
-    MetricFactory,
+from genrec.trainers.trainer_seqrec.utils.evaluations import (
+    SeqRecMetricFactory,
     calc_metric_hr,
     calc_metric_ndcg,
     calc_metric_popularity,
@@ -64,11 +64,11 @@ def test_calc_metric_unpopularity_counts_rare_items():
 
 
 def test_metric_factory_returns_registered_metric():
-    hr_metric = MetricFactory.create("hr")
+    hr_metric = SeqRecMetricFactory.create("hr")
 
     assert hr_metric is calc_metric_hr
 
 
 def test_metric_factory_raises_for_unknown_metric():
     with pytest.raises(ValueError):
-        MetricFactory.create("unknown")
+        SeqRecMetricFactory.create("unknown")

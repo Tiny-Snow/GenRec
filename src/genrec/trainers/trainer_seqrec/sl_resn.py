@@ -61,7 +61,7 @@ class SLReSNSeqRecTrainer(SeqRecTrainer[_SeqRecModel, SLReSNSeqRecTrainingArgume
         the model outputs in each step is treated as user embeddings.
 
     References:
-        - How Do Recommendation Models Amplify Popularity Bias? An Analysis from the Spectral Perspective. WSDM '25.
+    - How Do Recommendation Models Amplify Popularity Bias? An Analysis from the Spectral Perspective. WSDM '25.
     """
 
     args: SLReSNSeqRecTrainingArguments

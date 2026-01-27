@@ -77,6 +77,23 @@ class GenRecDataset(RecDataset[GenRecExample]):
         textual_data_path: Optional[Union[pd.DataFrame, str, Path]] = None,
         lm_encoder: Optional[LMEncoder] = None,
     ) -> None:
+        """Initialises the dataset and materialises user-level metadata.
+
+        Args:
+            interaction_data_path (Union[pd.DataFrame, str, Path]): Pandas DataFrame or path to a
+                pickle file containing `UserID` and `ItemID` columns. We assume that the `UserID`
+                begins from 0 and that `ItemID` begins from 1, both being contiguous integers. The
+                `ItemID` of 0 is reserved for padding.
+            split (DatasetSplitLiteral): Dataset split controlling example generation strategy.
+            max_seq_length (int): Maximum length of interaction histories.
+            min_seq_length (int): Minimum length of interaction histories.
+            sid_cache (Optional[Int[np.ndarray, "I+1 C"]]): Optional mapping from item ID to SID
+                sequence, stored as numpy arrays.
+            textual_data_path (Optional[Union[pd.DataFrame, str, Path]]): Optional DataFrame or
+                pickle file with `ItemID` and `Title` columns.
+            lm_encoder (Optional[LMEncoder]): Optional encoder used to transform item titles into
+                dense embeddings.
+        """
         super().__init__(
             interaction_data_path,
             split,
