@@ -245,7 +245,7 @@ class QuantizerTrainer(Trainer, Generic[_QuantizerModel, _QuantizerTrainingArgum
         assert isinstance(
             self.train_dataset, QuantizerDataset
         ), "Train dataset must be an instance of QuantizerDataset."
-        item_embeddings = self.train_dataset.item_embeddings
+        item_embeddings = self.train_dataset.item_textual_embeddings
         assert item_embeddings is not None, "Item embeddings are required to initialize codebooks."
         model.initialize_codebooks(torch.from_numpy(item_embeddings).to(model.device))
 

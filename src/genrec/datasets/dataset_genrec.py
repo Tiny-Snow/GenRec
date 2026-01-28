@@ -183,9 +183,9 @@ class GenRecDataset(RecDataset[GenRecExample]):
             example.input_sid_tokens = self._sid_cache[context]
             example.target_sid_tokens = self._sid_cache[target]
 
-        if self._item_embeddings is not None:
-            example.input_embeddings = self._item_embeddings[context]
-            example.target_embedding = self._item_embeddings[target]
+        if self._item_textual_embeddings is not None:
+            example.input_embeddings = self._item_textual_embeddings[context]
+            example.target_embedding = self._item_textual_embeddings[target]
 
         return example
 
@@ -294,7 +294,7 @@ class GenRecCollator(RecCollator[GenRecExample]):
 
         self._item_size = dataset.item_size
         self._sid_cache: Optional[Int[np.ndarray, "I+1 C"]] = dataset.sid_cache
-        self._item_embeddings: Optional[Float[np.ndarray, "I+1 D"]] = dataset.item_embeddings
+        self._item_embeddings: Optional[Float[np.ndarray, "I+1 D"]] = dataset.item_textual_embeddings
         if self._config.need_sid_tokens and self._sid_cache is None:  # pragma: no cover - defensive guard
             raise ValueError("Dataset must have SID cache when need_sid_tokens is True.")
         if self._config.need_embeddings and self._item_embeddings is None:  # pragma: no cover - defensive guard

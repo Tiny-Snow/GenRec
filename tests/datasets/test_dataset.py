@@ -244,7 +244,7 @@ def test_genrec_dataset_examples(genrec_dataset, sid_cache, dummy_encoder):
     assert genrec_dataset.user_size == 3
     assert genrec_dataset.item_size == 7
     assert genrec_dataset.sid_width == sid_cache.shape[1]
-    assert genrec_dataset.embedding_dim == dummy_encoder.embedding_dim
+    assert genrec_dataset.textual_embedding_dim == dummy_encoder.embedding_dim
 
     example = genrec_dataset[0]
     assert example.user_id in {0, 1, 2}
@@ -383,6 +383,41 @@ def test_genrec_iter_split_handles_eval_and_test(interaction_frame, split, expec
     assert context.tolist() == expected_context
     assert target == expected_target
     assert context_times.tolist() == times[: len(expected_context)].tolist()
+
+
+def test_genrec_item_size_prefers_textual_titles_without_encoding(dummy_encoder):
+    interaction_frame = _make_short_interaction_frame(length=3)
+    textual_frame = _make_textual_frame(item_pool=6)
+
+    dataset_text_only = GenRecDataset(
+        interaction_data_path=interaction_frame,
+        split=DatasetSplitLiteral.TRAIN,
+        max_seq_length=4,
+        min_seq_length=1,
+        textual_data_path=textual_frame,
+    )
+    assert dataset_text_only.item_size == 6
+    assert dataset_text_only.item_textual_embeddings is None
+
+    dataset_no_textual = GenRecDataset(
+        interaction_data_path=interaction_frame,
+        split=DatasetSplitLiteral.TRAIN,
+        max_seq_length=4,
+        min_seq_length=1,
+    )
+    assert dataset_no_textual.item_size == 3
+
+    dataset_with_encoder = GenRecDataset(
+        interaction_data_path=interaction_frame,
+        split=DatasetSplitLiteral.TRAIN,
+        max_seq_length=4,
+        min_seq_length=1,
+        textual_data_path=textual_frame,
+        lm_encoder=dummy_encoder,
+    )
+    assert dataset_with_encoder.item_size == 6
+    assert dataset_with_encoder.item_textual_embeddings is not None
+    assert dataset_with_encoder.textual_embedding_dim == dummy_encoder.embedding_dim
 
 
 def test_genrec_tail_truncation_keeps_recent_history_only():

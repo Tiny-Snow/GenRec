@@ -148,7 +148,7 @@ def test_quantizer_trainer_defaults_and_initialize_codebooks(tmp_path) -> None:
 
     assert model.initialize_called is True
     assert model.last_init_embeddings is not None
-    torch.testing.assert_close(model.last_init_embeddings.cpu(), torch.from_numpy(dataset.item_embeddings))
+    torch.testing.assert_close(model.last_init_embeddings.cpu(), torch.from_numpy(dataset.item_textual_embeddings))
 
 
 def test_quantizer_trainer_compute_loss_with_model_loss(tmp_path) -> None:
