@@ -347,6 +347,37 @@ def test_genrec_dataset_train_item_popularity_matches_recomputed(genrec_dataset)
     np.testing.assert_array_equal(genrec_dataset.train_item_popularity, recomputed)
 
 
+def test_genrec_dataset_sid2item_mapping(genrec_dataset, sid_cache):
+    mapping = genrec_dataset.sid2item
+    assert len(mapping) == genrec_dataset.item_size
+
+    expected = {tuple(sid_cache[item_id].tolist()): item_id for item_id in range(1, genrec_dataset.item_size + 1)}
+    assert mapping == expected
+
+    arbitrary_sid = tuple(sid_cache[3].tolist())
+    assert mapping[arbitrary_sid] == 3
+
+
+def test_genrec_dataset_prefix_allowed_tokens_fn(genrec_dataset, sid_cache):
+    prefix_fn = genrec_dataset.get_prefix_allowed_tokens_fn()
+    assert prefix_fn is not None
+
+    allowed_from_root = prefix_fn(0, torch.tensor([], dtype=torch.int64))
+    expected_root_tokens = sorted(int(token) for token in sid_cache[1 : genrec_dataset.item_size + 1, 0])
+    assert sorted(allowed_from_root) == expected_root_tokens
+
+    test_item_id = 3
+    sid_tokens = sid_cache[test_item_id]
+    allowed_next = prefix_fn(0, torch.tensor([int(sid_tokens[0])], dtype=torch.int64))
+    assert allowed_next == [int(sid_tokens[1])]
+
+    allowed_after_full_item = prefix_fn(0, torch.tensor(sid_tokens.tolist(), dtype=torch.int64))
+    assert allowed_after_full_item == []
+
+    invalid_allowed = prefix_fn(0, torch.tensor([9999], dtype=torch.int64))
+    assert invalid_allowed == []
+
+
 def test_quantizer_dataset_train_item_popularity_defaults_to_global(quantizer_dataset):
     np.testing.assert_array_equal(quantizer_dataset.train_item_popularity, quantizer_dataset.item_popularity)
 

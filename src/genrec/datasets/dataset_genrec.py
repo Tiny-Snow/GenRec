@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from jaxtyping import Float, Int
 import numpy as np
 import pandas as pd
+import torch
 
 from .base import (
     DatasetSplitLiteral,
@@ -22,6 +23,7 @@ from .base import (
     RecExampleFactory,
 )
 from .modules.lm_encoders import LMEncoder
+from .modules.prefix_tree import PrefixTree
 
 __all__ = [
     "GenRecCollator",
@@ -104,6 +106,7 @@ class GenRecDataset(RecDataset[GenRecExample]):
         """
         assert truncation_strategy in {"tail", "slide"}, f"Unsupported truncation strategy: {truncation_strategy}."
         self.truncation_strategy = truncation_strategy
+
         super().__init__(
             interaction_data_path,
             split,
@@ -113,10 +116,22 @@ class GenRecDataset(RecDataset[GenRecExample]):
             textual_data_path,
             lm_encoder,
         )
+
         if self._sid_cache is None:  # pragma: no cover - defensive guard
             raise ValueError("GenRecDataset requires `sid_cache` to materialise SID tokens.")
-        # recompute training set item popularity
+
+        # Recompute training set item popularity
         self._train_item_popularity = self._compute_train_item_popularity()
+
+        # Construct prefix tree for constrained decoding
+        self._prefix_tree = PrefixTree.from_mapping(
+            {item_id: self._sid_cache[item_id].tolist() for item_id in range(1, self.item_size + 1)}
+        )
+
+        # Cache item ID lookup from SID sequences
+        self._sid2item: Dict[Tuple[int, ...], int] = {
+            tuple(self._sid_cache[item_id].tolist()): item_id for item_id in range(1, self.item_size + 1)
+        }
 
     def _build_examples(self) -> List[GenRecExample]:
         """Generates training pairs for encoder-decoder style models using sliding
@@ -224,6 +239,32 @@ class GenRecDataset(RecDataset[GenRecExample]):
     def train_item_popularity(self) -> Int[np.ndarray, "I+1"]:
         """Returns the item popularity computed from the training set only."""
         return self._train_item_popularity
+
+    @property
+    def sid2item(self) -> Dict[Tuple[int, ...], int]:
+        """Returns the mapping from SID sequences to item IDs."""
+        return self._sid2item
+
+    def get_prefix_allowed_tokens_fn(
+        self,
+    ) -> Optional[Callable[[int, Int[torch.Tensor, "seq_len"]], List[int]]]:
+        """Returns a function that can be used during constrained beam search to restrict the next token
+        choices based on the prefix tree.
+
+        Returns:
+            Optional[Callable[[int, Int[torch.Tensor, "seq_len"]], List[int]]]: A function that takes a
+                batch index and the current input IDs tensor, and returns a list of allowed next tokens.
+                If no prefix tree is available, returns `None`.
+        """
+
+        def prefix_allowed_tokens(
+            batch_id: int,
+            input_ids: Int[torch.Tensor, "seq_len"],
+        ) -> List[int]:
+            prefix = input_ids.tolist()
+            return self._prefix_tree.next_tokens(prefix)
+
+        return prefix_allowed_tokens
 
 
 @RecCollatorConfigFactory.register("genrec")
