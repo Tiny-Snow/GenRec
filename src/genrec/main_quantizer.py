@@ -110,7 +110,7 @@ def save_experiment_config(
 
 
 def main():
-    """Main function for sequential recommendation experiments."""
+    """Main function for quantizer training experiments."""
 
     accelerator = Accelerator()
 
@@ -227,7 +227,9 @@ def main():
     # Load pretrained checkpoint if provided
     if pretrained_ckpt is not None:
         model = QuantizerModelFactory.from_pretrained(model_type, pretrained_ckpt, config=model_config)
-        assert isinstance(model, QuantizerModel), f"Pretrained model is not an instance of SeqRecModel: {type(model)}"
+        assert isinstance(
+            model, QuantizerModel
+        ), f"Pretrained model is not an instance of QuantizerModel: {type(model)}"
         if accelerator.is_main_process:
             logger.info(f"Loaded pretrained model {model_type} checkpoint from {pretrained_ckpt}.")
     else:
@@ -235,7 +237,7 @@ def main():
         if accelerator.is_main_process:
             logger.info(f"Initialized model {model_type}.")
 
-    # Builds trainer. Refer to the constructor of `SeqRecTrainer`.
+    # Builds trainer. Refer to the constructor of `QuantizerTrainer`.
     assert "trainer" in cfg, "`trainer` configuration section is missing."
     trainer_cfg = cfg["trainer"]
     trainer_type: str = trainer_cfg.pop("type", None)
