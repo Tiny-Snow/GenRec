@@ -2,33 +2,47 @@
 
 __all__ = []
 
-# from .model_genrec import ()
+from .model_genrec import (
+    GenRecModel,
+    GenRecModelFactory,
+    GenRecModelConfig,
+    GenRecModelConfigFactory,
+    GenRecOutput,
+    GenRecOutputFactory,
+)
 
-__all__ += []
+__all__ += [
+    "GenRecModel",
+    "GenRecModelFactory",
+    "GenRecModelConfig",
+    "GenRecModelConfigFactory",
+    "GenRecOutput",
+    "GenRecOutputFactory",
+]
 
 from .model_quantizer import (
     QuantizerModel,
+    QuantizerModelFactory,
     QuantizerModelConfig,
     QuantizerModelConfigFactory,
-    QuantizerModelFactory,
     QuantizerOutput,
     QuantizerOutputFactory,
 )
 
 __all__ += [
     "QuantizerModel",
+    "QuantizerModelFactory",
     "QuantizerModelConfig",
     "QuantizerModelConfigFactory",
-    "QuantizerModelFactory",
     "QuantizerOutput",
     "QuantizerOutputFactory",
 ]
 
 from .model_seqrec import (
     SeqRecModel,
+    SeqRecModelFactory,
     SeqRecModelConfig,
     SeqRecModelConfigFactory,
-    SeqRecModelFactory,
     SeqRecOutput,
     SeqRecOutputFactory,
 )

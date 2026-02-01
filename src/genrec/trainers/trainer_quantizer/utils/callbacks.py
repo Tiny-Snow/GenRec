@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
+from transformers.training_args import TrainingArguments
 
 __all__ = [
     "EpochIntervalEvalCallback",

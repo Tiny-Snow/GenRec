@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, Protocol, Sequence, Tuple
 
 from jaxtyping import Float, Int
 import numpy as np
-from transformers import EvalPrediction
+from transformers.trainer_utils import EvalPrediction
 
 from ....datasets import QuantizerDataset
 

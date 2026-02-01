@@ -10,7 +10,11 @@ from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, Tuple
 from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-from transformers import EvalPrediction, Trainer, TrainerCallback, TrainingArguments
+from transformers import Trainer
+from transformers.trainer_callback import TrainerCallback
+from transformers.trainer_utils import EvalPrediction
+from transformers.training_args import TrainingArguments
+
 
 from ...datasets import QuantizerCollator, QuantizerDataset
 from ...models import QuantizerModel, QuantizerOutput

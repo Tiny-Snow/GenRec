@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, Protocol, Sequence, Tuple, Union
 from jaxtyping import Int
 import numpy as np
 import torch
-from transformers import EvalPrediction
+from transformers.trainer_utils import EvalPrediction
 
 from ....datasets import SeqRecDataset
 
