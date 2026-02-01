@@ -179,13 +179,57 @@ def test_quantizer_trainer_compute_loss_with_model_loss(tmp_path) -> None:
     batch = [dataset[0], dataset[1]]
     inputs = collator(batch)
 
-    loss, output_dict = trainer.compute_loss(trainer.model, inputs, return_outputs=True)
+    loss, outputs = trainer.compute_loss(trainer.model, inputs, return_outputs=True)
 
     expected = torch.tensor(1.0 + 4.0 * args.model_loss_weight)
     torch.testing.assert_close(loss, expected)
-    torch.testing.assert_close(output_dict["loss"], expected)
-    assert output_dict["semantic_ids"].shape == (2, model.config.num_codebooks)
-    assert output_dict["item_id"].shape == (2,)
+    assert isinstance(outputs, QuantizerOutput)
+    assert outputs.semantic_ids is not None
+    assert outputs.semantic_ids.shape == (2, model.config.num_codebooks)
+
+
+def test_quantizer_trainer_prediction_step_returns_metric_payload(tmp_path) -> None:
+    dataset = _build_quantizer_dataset()
+    collator = QuantizerCollator(dataset)
+    model = DummyQuantizerModel(
+        QuantizerModelConfig(
+            embed_dim=4,
+            hidden_sizes=(3,),
+            num_codebooks=2,
+            codebook_size=8,
+            codebook_dim=2,
+        )
+    )
+    args = QuantizerTrainingArguments(output_dir=str(tmp_path))
+
+    trainer = MinimalQuantizerTrainer(
+        model=model,
+        args=args,
+        data_collator=collator,
+        train_dataset=dataset,
+    )
+
+    batch = [dataset[0], dataset[1]]
+    inputs = collator(batch)
+
+    loss, predictions, labels = trainer.prediction_step(
+        trainer.model,
+        inputs,
+        prediction_loss_only=False,
+    )
+
+    assert loss is not None
+    assert predictions is not None
+    assert isinstance(predictions, tuple)
+    assert len(predictions) == 5
+    semantic_ids, reconstruction_loss, codebook_loss, commitment_loss, item_id = predictions
+    assert semantic_ids.shape == (len(batch), model.config.num_codebooks)
+    assert reconstruction_loss.shape == (len(batch),)
+    assert codebook_loss.shape == (len(batch),)
+    assert commitment_loss.shape == (len(batch),)
+    assert item_id.shape == (len(batch),)
+    assert labels is not None
+    torch.testing.assert_close(item_id, labels)
 
 
 def test_quantizer_trainer_compute_loss_without_model_loss(tmp_path) -> None:
