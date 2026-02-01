@@ -123,6 +123,7 @@ class HSTUModel(SeqRecModel[HSTUModelConfig, HSTUModelOutput]):
     """
 
     config_class = HSTUModelConfig
+    supports_gradient_checkpointing = True
 
     def __init__(self, config: HSTUModelConfig) -> None:
         """Initializes HSTU model with the given configuration."""

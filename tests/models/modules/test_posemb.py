@@ -4,6 +4,7 @@ from genrec.models.modules.posemb import (
     LearnableInputPositionalEmbedding,
     RelativeBucketedTimeAndPositionAttentionBias,
     RotaryEmbedding,
+    T5RelativePositionBias,
     apply_rotary_pos_emb,
 )
 
@@ -117,3 +118,38 @@ def test_relative_bucketed_bias_combines_time_and_position_components() -> None:
     expected_time = module.time_bias_table.weight[bucketed].squeeze(-1)
 
     torch.testing.assert_close(bias[:, 0], expected_pos + expected_time)
+
+
+def test_t5_relative_position_bias_matches_bucket_computation() -> None:
+    num_heads = 2
+    module = T5RelativePositionBias(
+        num_buckets=8,
+        max_distance=16,
+        num_heads=num_heads,
+        is_bidirectional=False,
+    )
+
+    with torch.no_grad():
+        weights = torch.arange(module.num_buckets * num_heads, dtype=torch.float32).view(module.num_buckets, num_heads)
+        module.relative_attention_bias.weight.copy_(weights)
+
+    query_length, key_length = 3, 4
+    cache_position = torch.tensor([5, 6, 7], dtype=torch.long)
+
+    bias = module(query_length, key_length, cache_position=cache_position)
+    assert bias.shape == (1, num_heads, query_length, key_length)
+
+    # replicate bucket logic for expected values
+    query_pos = cache_position
+    key_pos = torch.arange(key_length, dtype=torch.long)
+    rel_pos = key_pos[None, :] - query_pos[:, None]
+    expected_buckets = module._relative_position_bucket(
+        rel_pos,
+        bidirectional=module.is_bidirectional,
+        num_buckets=module.num_buckets,
+        max_distance=module.max_distance,
+    )
+    expected_values = module.relative_attention_bias(expected_buckets)
+    expected_bias = expected_values.permute(2, 0, 1).unsqueeze(0)
+
+    torch.testing.assert_close(bias, expected_bias)

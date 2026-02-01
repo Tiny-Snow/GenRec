@@ -22,7 +22,6 @@ from .base import (
     RecExampleFactory,
 )
 from .modules.lm_encoders import LMEncoder
-from .modules.negative_samplers import NegativeSamplerFactory
 
 __all__ = [
     "GenRecCollator",
@@ -35,28 +34,30 @@ __all__ = [
 @RecExampleFactory.register("genrec")
 @dataclass(slots=True)
 class GenRecExample(RecExample):
-    """Container storing a single training example for encoder-decoder models.
+    """Container storing a single training pair with item-level and SID views
+    that suit encoder-decoder style generative recommendation models.
 
-    The example pairs a truncated interaction history with the next positive
-    item that the model is asked to predict.
+    The example keeps both the original item identifiers (for bookkeeping) and
+    their flattened Semantic ID (SID) token counterparts that are directly
+    consumed by generative models.
 
     Attributes:
         user_id: Identifier of the user to which the example belongs.
-        input_ids: Interaction history (already truncated) that conditions the model.
-        labels: Next positive item the model is asked to predict.
-        timestamps: Timestamps aligned with `input_ids`, in Unix time.
-        input_sid_tokens: Optional matrix of SIDs corresponding to `input_ids`.
-        target_sid_tokens: Optional SIDs for `labels`.
-        input_embeddings: Optional dense embedding matrix aligned with `input_ids`.
-        target_embedding: Optional dense embedding vector for `labels`.
+        input_ids: Flattened SID tokens derived from `input_item_ids`.
+        labels: SID tokens representing `label_item_ids`.
+        input_item_ids: Interaction history expressed as item IDs.
+        label_item_ids: Positive item ID that should follow the history.
+        timestamps: Timestamps aligned with `input_item_ids` in Unix time.
+        input_embeddings: Optional dense embedding matrix aligned with `input_item_ids`.
+        target_embedding: Optional dense embedding vector for `label_item_ids`.
     """
 
     user_id: int
-    input_ids: Int[np.ndarray, "L"]
-    labels: int
+    input_ids: Int[np.ndarray, "L*C"]
+    labels: Int[np.ndarray, "C"]
+    input_item_ids: Int[np.ndarray, "L"]
+    label_item_ids: int
     timestamps: Int[np.ndarray, "L"]
-    input_sid_tokens: Optional[Int[np.ndarray, "L C"]] = None
-    target_sid_tokens: Optional[Int[np.ndarray, "C"]] = None
     input_embeddings: Optional[Float[np.ndarray, "L D"]] = None
     target_embedding: Optional[Float[np.ndarray, "D"]] = None
 
@@ -76,6 +77,7 @@ class GenRecDataset(RecDataset[GenRecExample]):
         sid_cache: Optional[Int[np.ndarray, "I+1 C"]] = None,
         textual_data_path: Optional[Union[pd.DataFrame, str, Path]] = None,
         lm_encoder: Optional[LMEncoder] = None,
+        truncation_strategy: str = "tail",
     ) -> None:
         """Initialises the dataset and materialises user-level metadata.
 
@@ -93,7 +95,15 @@ class GenRecDataset(RecDataset[GenRecExample]):
                 pickle file with `ItemID` and `Title` columns.
             lm_encoder (Optional[LMEncoder]): Optional encoder used to transform item titles into
                 dense embeddings.
+            truncation_strategy (str): Strategy for truncating interaction histories, supported
+                options are `"tail"` and `"slide"`. `"tail"` will directly truncate the user history
+                to `max_seq_length`, then construct training examples with length of history from
+                `min_seq_length` to (up to) `max_seq_length`. `"slide"` will use a sliding window of
+                size `max_seq_length` over the entire user history to construct training examples.
+                Defaults to `"tail"`.
         """
+        assert truncation_strategy in {"tail", "slide"}, f"Unsupported truncation strategy: {truncation_strategy}."
+        self.truncation_strategy = truncation_strategy
         super().__init__(
             interaction_data_path,
             split,
@@ -103,6 +113,8 @@ class GenRecDataset(RecDataset[GenRecExample]):
             textual_data_path,
             lm_encoder,
         )
+        if self._sid_cache is None:  # pragma: no cover - defensive guard
+            raise ValueError("GenRecDataset requires `sid_cache` to materialise SID tokens.")
         # recompute training set item popularity
         self._train_item_popularity = self._compute_train_item_popularity()
 
@@ -113,6 +125,7 @@ class GenRecDataset(RecDataset[GenRecExample]):
         examples: List[GenRecExample] = []
         user_ids = np.arange(self.user_size, dtype=np.int64)
         for user_id, items, timestamps in zip(user_ids, self.user_interactions, self.user_interaction_timestamps):
+            items, timestamps = self._tail_truncate(items, timestamps)
             for context, target, times in self._iter_split(items, timestamps):
                 if context.shape[0] < self._min_seq_length:  # pragma: no cover - insufficient length
                     continue
@@ -145,6 +158,20 @@ class GenRecDataset(RecDataset[GenRecExample]):
             if seq_len >= 2:
                 yield items[:-1], int(items[-1]), times[:-1]
 
+    def _tail_truncate(
+        self,
+        items: Int[np.ndarray, "..."],
+        times: Int[np.ndarray, "..."],
+    ) -> Tuple[Int[np.ndarray, "..."], Int[np.ndarray, "..."]]:
+        """Truncates the interaction history by keeping the most recent interactions.
+        We trim the history to `max_seq_length + 3` to account for the target and
+        validation/test items.
+        """
+        if self.truncation_strategy == "tail":
+            return items[-self._max_seq_length - 3 :], times[-self._max_seq_length - 3 :]
+        else:
+            return items, times
+
     def _construct_example(
         self,
         user_id: int,
@@ -153,15 +180,29 @@ class GenRecDataset(RecDataset[GenRecExample]):
         times: Int[np.ndarray, "..."],
     ) -> GenRecExample:
         """Constructs a GenRecExample from the provided context and target."""
-        example = GenRecExample(user_id=user_id, input_ids=context, labels=target, timestamps=times)
+        assert self._sid_cache is not None, "SID cache must be available after __init__ guard."
 
-        if self._sid_cache is not None:
-            example.input_sid_tokens = self._sid_cache[context]
-            example.target_sid_tokens = self._sid_cache[target]
+        input_item_ids = context.astype(np.int64, copy=True)
+        label_item_id = int(target)
+        timestamps = times.astype(np.int64, copy=True)
 
-        if self._item_embeddings is not None:
-            example.input_embeddings = self._item_embeddings[context]
-            example.target_embedding = self._item_embeddings[target]
+        sid_context: Int[np.ndarray, "L C"] = self._sid_cache[input_item_ids]
+        sid_target: Int[np.ndarray, "C"] = self._sid_cache[label_item_id]
+        flattened_context = sid_context.reshape(-1).astype(np.int64, copy=True)
+        sid_target = sid_target.astype(np.int64, copy=True)
+
+        example = GenRecExample(
+            user_id=user_id,
+            input_ids=flattened_context,
+            labels=sid_target,
+            input_item_ids=input_item_ids,
+            label_item_ids=label_item_id,
+            timestamps=timestamps,
+        )
+
+        if self._item_textual_embeddings is not None:
+            example.input_embeddings = self._item_textual_embeddings[input_item_ids]
+            example.target_embedding = self._item_textual_embeddings[label_item_id]
 
         return example
 
@@ -192,19 +233,11 @@ class GenRecCollatorConfig(RecCollatorConfig):
 
     Attributes:
         pad_sid: Padding value for Semantic ID token.
-        num_negative_samples: Number of negatives to sample per instance.
-        negative_sampling_strategy: Name of the negative sampling strategy to use.
-        need_sid_tokens: Whether to collate SID tokens if present. Note that
-            if the dataset examples do not contain SID tokens, this flag should
-            be set to `False` to avoid errors.
         need_embeddings: Whether to collate dense embeddings if present. Note that
             if the dataset examples do not contain embeddings, this flag should
             be set to `False` to avoid errors.
     """
 
-    num_negative_samples: int = 0
-    negative_sampling_strategy: str = "uniform"
-    need_sid_tokens: bool = True
     need_embeddings: bool = False
 
     @property
@@ -221,28 +254,22 @@ class GenRecCollator(RecCollator[GenRecExample]):
 
             user_id: `Int[torch.Tensor, "B"]`.
                 User IDs.
-            input_ids: `Int[torch.Tensor, "B L"]`.
-                Input item ID sequences.
-            labels: `Int[torch.Tensor, "B"]`.
+            input_ids: `Int[torch.Tensor, "B L*C"]`.
+                Flattened SID tokens aligned with `input_item_ids`.
+            labels: `Int[torch.Tensor, "B C"]`.
+                SID tokens describing `label_item_ids`.
+            input_item_ids: `Int[torch.Tensor, "B L"]`.
+                Input item ID sequences used for bookkeeping/metrics.
+            label_item_ids: `Int[torch.Tensor, "B"]`.
                 Target item IDs.
             timestamps: `Int[torch.Tensor, "B L"]`.
                 Input timestamp sequences.
-            attention_mask: `Int[torch.Tensor, "B L"]`.
-                Attention masks for inputs.
-            input_sid_tokens: `Optional[Int[torch.Tensor, "B L C"]]`.
-                Input Semantic ID token sequences, when needed.
-            target_sid_tokens: `Optional[Int[torch.Tensor, "B C"]]`.
-                Target Semantic ID tokens, when needed.
+            attention_mask: `Int[torch.Tensor, "B L*C"]`.
+                Attention masks for the flattened SID tokens.
             input_embeddings: `Optional[Float[torch.Tensor, "B L D"]]`.
                 Input dense embeddings, when present and needed.
             target_embedding: `Optional[Float[torch.Tensor, "B D"]]`.
                 Target dense embeddings, when present and needed.
-            negative_item_ids: `Optional[Int[torch.Tensor, "B N"]]`.
-                Sampled negative item IDs, when negatives are requested.
-            negative_sid_tokens: `Optional[Int[torch.Tensor, "B N C"]]`.
-                Sampled negative Semantic ID tokens, when needed.
-            negative_embeddings: `Optional[Float[torch.Tensor, "B N D"]]`.
-                Sampled negative dense embeddings, when present and needed.
     """
 
     def __init__(
@@ -262,38 +289,29 @@ class GenRecCollator(RecCollator[GenRecExample]):
         """
         self._config = config or GenRecCollatorConfig()
 
-        assert self._config.num_negative_samples >= 0, "num_negative_samples must be non-negative."
-        self._negative_sampler = NegativeSamplerFactory.create(
-            self._config.negative_sampling_strategy,
-            dataset=dataset,
-        )
-
         self._item_size = dataset.item_size
-        self._sid_cache: Optional[Int[np.ndarray, "I+1 C"]] = dataset.sid_cache
-        self._item_embeddings: Optional[Float[np.ndarray, "I+1 D"]] = dataset.item_embeddings
-        if self._config.need_sid_tokens and self._sid_cache is None:  # pragma: no cover - defensive guard
-            raise ValueError("Dataset must have SID cache when need_sid_tokens is True.")
+        self._sid_width = dataset.sid_width
+        self._item_embeddings: Optional[Float[np.ndarray, "I+1 D"]] = dataset.item_textual_embeddings
         if self._config.need_embeddings and self._item_embeddings is None:  # pragma: no cover - defensive guard
             raise ValueError("Dataset must have item embeddings when need_embeddings is True.")
 
         need_pad_keys: Dict[str, type] = {
             "input_ids": np.int64,
-            "timestamps": np.int64,
             "attention_mask": np.int64,
+            "input_item_ids": np.int64,
+            "timestamps": np.int64,
         }
         no_pad_keys: Dict[str, type] = {
             "user_id": np.int64,
+            "label_item_ids": np.int64,
             "labels": np.int64,
         }
         pad_values: Dict[str, np.generic] = {
-            "input_ids": self._config.pad_item,
-            "timestamps": np.int64(0),
+            "input_ids": self._config.pad_sid,
             "attention_mask": np.int64(0),
+            "input_item_ids": self._config.pad_item,
+            "timestamps": np.int64(0),
         }
-        if self._config.need_sid_tokens:
-            need_pad_keys["input_sid_tokens"] = np.int64
-            no_pad_keys["target_sid_tokens"] = np.int64
-            pad_values["input_sid_tokens"] = self._config.pad_sid
         if self._config.need_embeddings:
             need_pad_keys["input_embeddings"] = np.float32
             no_pad_keys["target_embedding"] = np.float32
@@ -306,30 +324,7 @@ class GenRecCollator(RecCollator[GenRecExample]):
         batch: List[Dict[str, np.ndarray]],
         batch_seed: int,
     ) -> None:
-        """Add attention masks to the batch before padding."""
+        """Add attention masks aligned with flattened SID tokens before padding."""
         for sample in batch:
             seq_len = sample["input_ids"].shape[0]
             sample["attention_mask"] = np.ones((seq_len,), dtype=np.int64)
-
-    def _process_after_padding(
-        self,
-        need_pad_batch: Dict[str, np.ndarray],
-        no_pad_batch: Dict[str, np.ndarray],
-        batch_seed: int,
-    ) -> None:
-        """Perform negative sampling after padding, if requested."""
-        if self._config.num_negative_samples == 0:  # pragma: no cover - no negatives requested
-            return
-        user_histories = need_pad_batch["input_ids"]
-        negative_item_ids: Int[np.ndarray, "B N"] = self._negative_sampler(
-            history=user_histories,
-            num_samples=self._config.num_negative_samples,
-            batch_seed=batch_seed,
-        )
-        no_pad_batch["negative_item_ids"] = negative_item_ids
-        if self._config.need_sid_tokens and self._sid_cache is not None:
-            negative_sid_tokens: Int[np.ndarray, "B N C"] = self._sid_cache[negative_item_ids]
-            no_pad_batch["negative_sid_tokens"] = negative_sid_tokens
-        if self._config.need_embeddings and self._item_embeddings is not None:
-            negative_embeddings: Float[np.ndarray, "B N D"] = self._item_embeddings[negative_item_ids]
-            no_pad_batch["negative_embeddings"] = negative_embeddings

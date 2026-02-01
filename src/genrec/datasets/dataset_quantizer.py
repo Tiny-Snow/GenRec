@@ -93,11 +93,11 @@ class QuantizerDataset(RecDataset[QuantizerExample]):
 
     def _build_examples(self) -> List[QuantizerExample]:
         """Generates training examples for quantizer training."""
-        assert self._item_embeddings is not None, "Item embeddings are required for quantizer training."
+        assert self._item_textual_embeddings is not None, "Item embeddings are required for quantizer training."
         examples = [
             QuantizerExample(
                 i,
-                self._item_embeddings[i],
+                self._item_textual_embeddings[i],
                 self._aux_item_embeddings[i] if self._aux_item_embeddings is not None else None,
             )
             for i in range(1, self.item_size + 1)

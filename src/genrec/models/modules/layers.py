@@ -7,19 +7,20 @@ from typing import Optional, Tuple
 from jaxtyping import Bool, Float, Int
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-from .attention import MaskedHSTUAttention, MaskedSelfAttentionWithRoPE
+from transformers.cache_utils import EncoderDecoderCache
 from transformers.modeling_layers import GradientCheckpointingLayer
+
+from .attention import MaskedHSTUAttention, MaskedSelfAttentionWithRoPE, T5Attention
 from .feedforward import SwiGLU
 from .layernorm import RMSNorm
 from .utils import create_attention_mask
 
 __all__ = [
     "LlamaDecoderLayer",
-    "SequentialTransductionUnit",
     "SpringLlamaDecoderLayer",
+    "SequentialTransductionUnit",
     "SpringSequentialTransductionUnit",
+    "T5Block",
     "spring_attention_weight_spectral_norm",
     "spring_power_iteration",
 ]
@@ -595,3 +596,238 @@ class SpringSequentialTransductionUnit(GradientCheckpointingLayer):
             attn_weight_sn = None
 
         return hidden_states, attn_weights, attn_weight_sn
+
+
+class T5Block(GradientCheckpointingLayer):
+    """A standard T5 Transformer Block, following `transformers.T5Block`'s implementation.
+
+    Compared to standard T5Block, our attention module provides several options to generalize
+    and enhance the attention mechanism, including:
+    - Option to switch the original learnable relative attention bias with Rotary Positional
+    Embeddings (RoPE) for better extrapolation to longer sequences and improved performance.
+    - We replace the original LayerNorm with RMSNorm for better training stability.
+    - We replace the original feed-forward network with SwiGLU for improved model capacity.
+
+    References:
+    - Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer. JMLR '20.
+    """
+
+    def __init__(
+        self,
+        hidden_size: int,
+        head_dim: int,
+        num_heads: int,
+        intermediate_size: int,
+        linear_dropout: float = 0.0,
+        attention_dropout: float = 0.0,
+        attention_bias: bool = False,
+        ffn_bias: bool = False,
+        is_decoder: bool = False,
+        has_relative_attention_bias: bool = False,
+        relative_attention_num_buckets: int = 32,
+        relative_attention_max_distance: int = 128,
+        enable_rope: bool = False,
+        layer_idx: Optional[int] = None,
+    ) -> None:
+        """Initializes T5Block module.
+
+        Args:
+            hidden_size (int): Dimensionality of the model's hidden representations.
+            head_dim (int): Dimensionality of each attention head.
+            num_heads (int): Number of attention heads.
+            intermediate_size (int): Dimensionality of the feed-forward network's intermediate layer.
+            linear_dropout (float): Dropout rate for the output of attention and feed-forward network. Default is 0.0.
+            attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
+            attention_bias (bool): Whether to include bias terms in the attention projections. Default is False.
+            ffn_bias (bool): Whether to include bias terms in the feed-forward network projections. Default is False.
+            is_decoder (bool): Whether this attention module is used in the decoder. This is used to determine
+                the directionality of relative positional embeddings. Default is False.
+            has_relative_attention_bias (bool): Whether to compute learnable relative positional bias. If False, this
+                module will not initialize a `T5RelativePositionBias` instance. Typically, T5 set `has_relative_attention_bias`
+                to True only for the first block, while the rest blocks reuse the same relative positional bias. Note
+                that when `enable_rope` is True, this argument will be ignored. Default is False.
+            relative_attention_num_buckets (int): Number of buckets for relative positional embeddings. Default is 32.
+            relative_attention_max_distance (int): Maximum distance for relative positional embeddings. Default is 128.
+            enable_rope (bool): Whether to use RoPE instead of learnable relative positional bias. If False, the original
+                learnable relative positional bias in T5 will be used. Default is False.
+            layer_idx (Optional[int]): Optional layer index of this attention module in the model. This should be set
+                when caching past key/values in the decoder for autoregressive generation. Default is None.
+        """
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.head_dim = head_dim
+        self.num_heads = num_heads
+        self.intermediate_size = intermediate_size
+        self.attention_dropout = attention_dropout
+        self.attention_bias = attention_bias
+        self.ffn_bias = ffn_bias
+        self.is_decoder = is_decoder
+        self.has_relative_attention_bias = has_relative_attention_bias
+        self.relative_attention_num_buckets = relative_attention_num_buckets
+        self.relative_attention_max_distance = relative_attention_max_distance
+        self.enable_rope = enable_rope
+        self.layer_idx = layer_idx
+
+        self.self_attn = T5Attention(
+            hidden_size=hidden_size,
+            head_dim=head_dim,
+            num_heads=num_heads,
+            attention_dropout=attention_dropout,
+            attention_bias=attention_bias,
+            is_decoder=is_decoder,
+            has_relative_attention_bias=has_relative_attention_bias,
+            relative_attention_num_buckets=relative_attention_num_buckets,
+            relative_attention_max_distance=relative_attention_max_distance,
+            enable_rope=enable_rope,
+            layer_idx=layer_idx,
+        )
+        self.self_attn_layernorm = RMSNorm(hidden_size)
+        self.self_attn_dropout = nn.Dropout(linear_dropout)
+
+        self.cross_attn: Optional[T5Attention] = None
+        self.cross_attn_layernorm: Optional[RMSNorm] = None
+        self.cross_attn_dropout: Optional[nn.Dropout] = None
+        if is_decoder:
+            # cross attention disables relative positional embeddings or RoPE
+            self.cross_attn = T5Attention(
+                hidden_size=hidden_size,
+                head_dim=head_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                attention_bias=attention_bias,
+                is_decoder=is_decoder,
+                has_relative_attention_bias=False,
+                enable_rope=False,
+                layer_idx=layer_idx,
+            )
+            self.cross_attn_layernorm = RMSNorm(hidden_size)
+            self.cross_attn_dropout = nn.Dropout(linear_dropout)
+
+        self.mlp = SwiGLU(
+            hidden_size=hidden_size,
+            intermediate_size=intermediate_size,
+            ffn_bias=ffn_bias,
+            dropout=linear_dropout,
+        )
+        self.post_attention_layernorm = RMSNorm(hidden_size)
+
+    def forward(
+        self,
+        hidden_states: Float[torch.Tensor, "B L d"],
+        attention_mask: Optional[Float[torch.Tensor, "B 1 #L L_k"]] = None,
+        position_bias: Optional[Float[torch.Tensor, "#B H L L"]] = None,
+        position_embeddings: Optional[
+            Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]
+        ] = None,
+        encoder_hidden_states: Optional[Float[torch.Tensor, "B L_enc d"]] = None,
+        encoder_attention_mask: Optional[Float[torch.Tensor, "B 1 1 L_enc"]] = None,
+        encoder_decoder_position_bias: Optional[Float[torch.Tensor, "#B H L L_enc"]] = None,
+        past_key_values: Optional[EncoderDecoderCache] = None,
+        cache_position: Optional[Int[torch.Tensor, "L"]] = None,
+        output_attentions: bool = False,
+    ) -> Tuple[
+        Float[torch.Tensor, "B L d"],
+        Tuple[
+            Optional[Float[torch.Tensor, "#B H L L"]],
+            Optional[Float[torch.Tensor, "B H L L"]],
+        ],
+        Tuple[
+            Optional[Float[torch.Tensor, "#B H L L_enc"]],
+            Optional[Float[torch.Tensor, "B H L L_enc"]],
+        ],
+    ]:
+        """Forward pass for T5Block.
+
+        Args:
+            hidden_states (Float[torch.Tensor, "B L d"]): Input tensor of shape (batch_size, seq_len, hidden_size).
+                Note that for cross-attention in the decoder, the encoder output should be provided in the argument
+                `encoder_hidden_states`.
+            attention_mask (Optional[Float[torch.Tensor, "B 1 #L L_k"]]): Optional attention mask added to the self-attention
+                scores before softmax, with shape either (batch_size, 1, seq_len, key_len) for causal self-attention in
+                decoder, or (batch_size, 1, 1, key_len) for self-attention in encoder. Specifically, if the dimension
+                `L_k` is longer than the actual key length `L` (which can happen during autoregressive generation in the
+                decoder), the mask will be sliced accordingly. For cross-attention in the decoder, please use
+                `encoder_attention_mask`. Default is None.
+            position_bias (Optional[Float[torch.Tensor, "#B H L L"]]): Optional precomputed position bias to be added
+                to the attention scores. If None, and if `has_relative_attention_bias` is True and `enable_rope` is False,
+                the position bias will be computed based on the relative positions of the queries and keys from the T5
+                learnable relative positional embeddings. Default is None.
+            position_embeddings (Optional[Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]]):
+                Optional tuple of cosine and sine embeddings for RoPE. Note that when `enable_rope` is False, this argument
+                will be ignored. Default is None.
+            encoder_hidden_states (Optional[Float[torch.Tensor, "B L_enc d"]]): Optional encoder hidden states for
+                cross-attention in the decoder, of shape (batch_size, encoder_len, hidden_size). If provided, cross-attention
+                will be performed using these encoder hidden states as keys and values. Default is None.
+            encoder_attention_mask (Optional[Float[torch.Tensor, "B 1 1 L_enc"]]): Optional attention mask for
+                cross-attention in the decoder, of shape (batch_size, 1, 1, encoder_len). Default is None.
+            encoder_decoder_position_bias (Optional[Float[torch.Tensor, "#B H L L_enc"]]): Optional precomputed
+                position bias to be added to the cross-attention scores. If None, no positional bias will be used in
+                cross-attention. In usual T5 implementations, cross-attention does not use relative positional embeddings
+                or RoPE, and this argument is typically set to None. This argument can be provided manually if needed.
+                Default is None.
+            past_key_values (Optional[EncoderDecoderCache]): Optional cache for previously computed key and value states,
+                used in the decoder for faster autoregressive generation. Default is None.
+            cache_position (Optional[Int[torch.Tensor, "L"]]): Optional position IDs used to compute relative positions
+                when caching past key/values in the decoder. If provided, it should contain the absolute positions of the
+                current query tokens. Default is None.
+            output_attentions (bool): Whether to return the attention weights. Default is False.
+
+        Returns:
+            Tuple[
+                Float[torch.Tensor, "B L d"],
+                Tuple[
+                    Optional[Float[torch.Tensor, "#B H L L"]],
+                    Optional[Float[torch.Tensor, "B H L L"]],
+                ],
+                Tuple[
+                    Optional[Float[torch.Tensor, "#B H L L_enc"]],
+                    Optional[Float[torch.Tensor, "B H L L_enc"]],
+                ],
+            ]: A tuple containing:
+                - output tensor of shape (batch_size, seq_len, hidden_size).
+                - a tuple of optional self-attention position bias and attention weights.
+                - a tuple of optional cross-attention position bias and attention weights.
+        """
+        # Self-Attention
+        residual = hidden_states
+        hidden_states = self.self_attn_layernorm(hidden_states)
+        self_attn_outputs: Tuple = self.self_attn(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_bias=position_bias,
+            position_embeddings=position_embeddings,
+            past_key_values=past_key_values,
+            cache_position=cache_position,
+            output_attentions=output_attentions,
+        )
+        hidden_states = residual + self.self_attn_dropout(self_attn_outputs[0])
+        self_attn_outputs = self_attn_outputs[1:]  # remove the output hidden states
+
+        # Cross-Attention
+        do_cross_attention = self.is_decoder and encoder_hidden_states is not None
+        cross_attn_outputs = (None, None)
+        if do_cross_attention:
+            assert self.cross_attn is not None
+            assert self.cross_attn_layernorm is not None
+            assert self.cross_attn_dropout is not None
+
+            residual = hidden_states
+            hidden_states = self.cross_attn_layernorm(hidden_states)
+            cross_attn_outputs = self.cross_attn(
+                hidden_states,
+                attention_mask=encoder_attention_mask,
+                key_value_states=encoder_hidden_states,
+                position_bias=encoder_decoder_position_bias,
+                past_key_values=past_key_values,
+                output_attentions=output_attentions,
+            )
+            hidden_states = residual + self.cross_attn_dropout(cross_attn_outputs[0])
+            cross_attn_outputs = cross_attn_outputs[1:]  # remove the output hidden states
+
+        # Feed-Forward Network
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = residual + self.mlp(hidden_states)
+
+        return hidden_states, self_attn_outputs, cross_attn_outputs

@@ -203,12 +203,12 @@ class RecDataset(Dataset[_RecExample], Generic[_RecExample], ABC):
         self._min_seq_length = int(min_seq_length)
         self._sid_cache = sid_cache
 
-        self._item_embeddings: Optional[Float[np.ndarray, "I+1 D"]] = None
+        self._item_textual_embeddings: Optional[Float[np.ndarray, "I+1 D"]] = None
+        self._item_textual_data: Optional[np.ndarray] = None
         if textual_data_path is not None:
-            if lm_encoder is None:  # pragma: no cover - defensive guard
-                raise ValueError("textual_data_path provided without lm_encoder.")
-            assert isinstance(lm_encoder, LMEncoder)
-            self._item_embeddings = self._build_item_embeddings(textual_data_path, lm_encoder)
+            self._item_textual_embeddings, self._item_textual_data = self._build_item_textual_embeddings(
+                textual_data_path, lm_encoder
+            )
 
         (
             self._user_interactions,
@@ -233,6 +233,9 @@ class RecDataset(Dataset[_RecExample], Generic[_RecExample], ABC):
                 containing `UserID`, `ItemID`, and `Timestamp` (Unix time).
             columns (Sequence[str]): Required column names.
             dtypes (Mapping[str, Any]): Expected dtypes per column.
+
+        Returns:
+            pd.DataFrame: Loaded dataframe with required columns and dtypes.
         """
         if isinstance(data_source, pd.DataFrame):
             frame = data_source.copy(deep=False)
@@ -257,13 +260,25 @@ class RecDataset(Dataset[_RecExample], Generic[_RecExample], ABC):
 
         return frame
 
-    def _build_item_embeddings(
+    def _build_item_textual_embeddings(
         self,
         textual_data_path: Union[pd.DataFrame, str, Path],
-        lm_encoder: LMEncoder,
-    ) -> Float[np.ndarray, "I+1 D"]:
-        """Encodes item titles into dense vectors using `encoder`.
-        Returns a `np.ndarray` with shape (num_items, embedding_dim).
+        lm_encoder: Optional[LMEncoder],
+    ) -> Tuple[Optional[Float[np.ndarray, "I+1 D"]], np.ndarray]:
+        """Loads the item titles and encodes them into dense vectors using `encoder`.
+
+        Args:
+            textual_data_path (Union[pd.DataFrame, str, Path]): Pandas DataFrame
+                or path to a pickle file containing `ItemID` and `Title` columns.
+            lm_encoder (LMEncoder): Encoder used to transform item titles into dense embeddings.
+
+        Returns:
+            Tuple[Optional[Float[np.ndarray, "I+1 D"]], np.array]: A tuple containing:
+            - The optional item textual embeddings as a np.ndarray (float) with shape
+                (num_items + 1, embedding_dim), where index 0 is reserved for padding.
+                If lm_encoder is None, returns None.
+            - The original titles as a np.ndarray (object) with shape (num_items + 1,),
+                where index 0 is reserved for padding.
         """
         textual_frame = self._load_dataframe(
             textual_data_path,
@@ -275,11 +290,16 @@ class RecDataset(Dataset[_RecExample], Generic[_RecExample], ABC):
         assert textual_frame["ItemID"].nunique() == num_items, "ItemIDs must be contiguous integers."
 
         titles = textual_frame["Title"].to_list()
-        embeddings = lm_encoder.encode(titles).astype(np.float32, copy=False)
-        padding_embedding = np.zeros((1, embeddings.shape[1]), dtype=np.float32)
-        embeddings = np.vstack([padding_embedding, embeddings])
+        embeddings: Optional[Float[np.ndarray, "I+1 D"]] = None
+        if lm_encoder is not None:
+            embeddings = lm_encoder.encode(titles).astype(np.float32, copy=False)
+            padding_embedding = np.zeros((1, embeddings.shape[1]), dtype=np.float32)
+            embeddings = np.vstack([padding_embedding, embeddings])
 
-        return embeddings
+        titles = np.array(titles, dtype=object)
+        titles = np.concatenate((np.array([""], dtype=object), titles), axis=0)
+
+        return embeddings, titles
 
     def _build_interactions(
         self,
@@ -395,16 +415,16 @@ class RecDataset(Dataset[_RecExample], Generic[_RecExample], ABC):
         return self._sid_cache.shape[1]
 
     @property
-    def item_embeddings(self) -> Optional[Float[np.ndarray, "I+1 D"]]:
+    def item_textual_embeddings(self) -> Optional[Float[np.ndarray, "I+1 D"]]:
         """Exposes the cached dense item embeddings, when available."""
-        return self._item_embeddings
+        return self._item_textual_embeddings
 
     @property
-    def embedding_dim(self) -> Optional[int]:
+    def textual_embedding_dim(self) -> Optional[int]:
         """Returns the dimensionality of cached embeddings, if present."""
-        if self._item_embeddings is None:  # pragma: no cover - embedding absent
+        if self._item_textual_embeddings is None:  # pragma: no cover - embedding absent
             return None
-        return self._item_embeddings.shape[1]
+        return self._item_textual_embeddings.shape[1]
 
     @property
     def item_size(self) -> int:
@@ -412,8 +432,8 @@ class RecDataset(Dataset[_RecExample], Generic[_RecExample], ABC):
         is provided in `textual_data_path`, we infer the size from there; otherwise,
         we estimate it from the maximum item ID observed in the interaction data.
         """
-        if self._item_embeddings is not None:
-            return self._item_embeddings.shape[0] - 1
+        if self._item_textual_data is not None:
+            return self._item_textual_data.shape[0] - 1
 
         user_max_item_ids = [items[-1] if items.size > 0 else 0 for items in self._user_positive_items]
         return int(max(user_max_item_ids))

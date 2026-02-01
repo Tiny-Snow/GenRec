@@ -32,9 +32,9 @@ def compute_quantizer_metrics(
 
     Args:
         prediction (EvalPrediction): Object containing model predictions and labels. Predictions are
-            expected to be the dict values from `QuantizerTrainer.compute_loss`'s output dict,
-            at least including `semantic_ids`, `reconstruction_loss`, `codebook_loss`, `commitment_loss`,
-            and `item_id` in the first 5 elements. The labels are ignored for quantizer metrics.
+            expected to be the tuple returned by `QuantizerTrainer.prediction_step`, whose first
+            five elements are `semantic_ids`, `reconstruction_loss`, `codebook_loss`,
+            `commitment_loss`, and `item_id`. The labels are ignored for quantizer metrics.
         train_dataset (QuantizerDataset): Dataset used during training; required for global metrics.
         codebook_size (int): Size of the codebook used in the quantizer.
         metrics (Sequence[Tuple[str, Dict[str, Any]]]): Metric specifications, where each tuple
@@ -55,7 +55,7 @@ def compute_quantizer_metrics(
         commitment_loss: Float[np.ndarray, "B"] = prediction.predictions[3]
         item_id: Int[np.ndarray, "B"] = prediction.predictions[4]
     else:
-        raise ValueError("Predictions should be a tuple containing model output dict's values.")
+        raise ValueError("Predictions should be a tuple matching QuantizerTrainer.prediction_step outputs.")
 
     results: Dict[str, float] = {
         "reconstruction_loss": float(np.mean(reconstruction_loss)),

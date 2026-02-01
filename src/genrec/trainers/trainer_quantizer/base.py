@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, Tuple, Type, TypeVar, Union
 
-from jaxtyping import Float
+from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
 from transformers import EvalPrediction, Trainer, TrainerCallback, TrainingArguments
@@ -245,7 +245,7 @@ class QuantizerTrainer(Trainer, Generic[_QuantizerModel, _QuantizerTrainingArgum
         assert isinstance(
             self.train_dataset, QuantizerDataset
         ), "Train dataset must be an instance of QuantizerDataset."
-        item_embeddings = self.train_dataset.item_embeddings
+        item_embeddings = self.train_dataset.item_textual_embeddings
         assert item_embeddings is not None, "Item embeddings are required to initialize codebooks."
         model.initialize_codebooks(torch.from_numpy(item_embeddings).to(model.device))
 
@@ -255,7 +255,7 @@ class QuantizerTrainer(Trainer, Generic[_QuantizerModel, _QuantizerTrainingArgum
         inputs: dict[str, Union[torch.Tensor, Any]],
         return_outputs: bool = False,
         num_items_in_batch: Optional[torch.Tensor] = None,
-    ) -> Union[Float[torch.Tensor, ""], Tuple[Float[torch.Tensor, ""], Dict[str, torch.Tensor]]]:
+    ) -> Union[Float[torch.Tensor, ""], Tuple[Float[torch.Tensor, ""], QuantizerOutput]]:
         """Computes the loss for a batch of inputs.
 
         Args:
@@ -267,11 +267,10 @@ class QuantizerTrainer(Trainer, Generic[_QuantizerModel, _QuantizerTrainingArgum
                 valid items in each sequence in the batch (excluding padding).
 
         Returns:
-            Union[Float[torch.Tensor, ""], Tuple[Float[torch.Tensor, ""], Dict[str, torch.Tensor]]]:
-                Either the scalar loss or a tuple containing the loss and a dictionary with
-                loss and top-k indices of predicted items when `return_outputs` is True. The loss
-                combines the model-specific loss (if provided) with the quantizer losses via
-                `compute_quantizer_loss`.
+            Union[Float[torch.Tensor, ""], Tuple[Float[torch.Tensor, ""], QuantizerOutput]]:
+                Either the scalar loss or a tuple containing the loss and the raw `QuantizerOutput`
+                when `return_outputs` is True. The loss combines the model-specific loss (if provided)
+                with the quantizer losses via `compute_quantizer_loss`.
         """
         model = model.module if hasattr(model, "module") else model  # type: ignore - for distributed training
         assert isinstance(model, QuantizerModel), "Model must be an instance of QuantizerModel."
@@ -291,24 +290,8 @@ class QuantizerTrainer(Trainer, Generic[_QuantizerModel, _QuantizerTrainingArgum
             loss = quantizer_loss
 
         if return_outputs:
-            assert outputs.semantic_ids is not None, "Semantic IDs must be available in outputs."
-            assert outputs.reconstruction_loss is not None, "Reconstruction loss should be available in outputs."
-            assert outputs.codebook_loss is not None, "Codebook loss should be available in outputs."
-            assert outputs.commitment_loss is not None, "Commitment loss should be available in outputs."
-            assert "item_id" in inputs and isinstance(
-                inputs["item_id"], torch.Tensor
-            ), "Input batch must contain 'item_id' tensor."
-            output_dict: Dict[str, torch.Tensor] = {
-                "loss": loss,
-                "semantic_ids": outputs.semantic_ids,
-                "reconstruction_loss": outputs.reconstruction_loss,
-                "codebook_loss": outputs.codebook_loss,
-                "commitment_loss": outputs.commitment_loss,
-                "item_id": inputs["item_id"],
-            }
-            return loss, output_dict
-        else:
-            return loss
+            return loss, outputs
+        return loss
 
     @abstractmethod
     def compute_quantizer_loss(  # pragma: no cover - abstract method
@@ -333,3 +316,70 @@ class QuantizerTrainer(Trainer, Generic[_QuantizerModel, _QuantizerTrainingArgum
             Float[torch.Tensor, ""]: Scalar tensor representing the computed quantizer loss.
         """
         pass
+
+    def _build_prediction_outputs(
+        self,
+        outputs: QuantizerOutput,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+    ) -> tuple[torch.Tensor, ...]:
+        """Package tensors required by quantizer metrics into a tuple."""
+
+        assert outputs.semantic_ids is not None, "Semantic IDs must be available in outputs."
+        assert outputs.reconstruction_loss is not None, "Reconstruction loss should be available in outputs."
+        assert outputs.codebook_loss is not None, "Codebook loss should be available in outputs."
+        assert outputs.commitment_loss is not None, "Commitment loss should be available in outputs."
+        item_id = inputs.get("item_id")
+        assert isinstance(item_id, torch.Tensor), "Input batch must contain 'item_id' tensor."
+
+        semantic_ids: Int[torch.Tensor, "B C"] = outputs.semantic_ids.detach()
+        reconstruction_loss: Float[torch.Tensor, "B"] = outputs.reconstruction_loss.detach()
+        codebook_loss: Float[torch.Tensor, "B"] = outputs.codebook_loss.detach()
+        commitment_loss: Float[torch.Tensor, "B"] = outputs.commitment_loss.detach()
+        item_id_tensor: Int[torch.Tensor, "B"] = item_id.detach()
+
+        return (semantic_ids, reconstruction_loss, codebook_loss, commitment_loss, item_id_tensor)
+
+    def prediction_step(  # type: ignore[override]
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[list[str]] = None,
+    ) -> tuple[Optional[torch.Tensor], Optional[tuple[torch.Tensor, ...]], Optional[torch.Tensor]]:
+        """Evaluation step that surfaces loss plus the semantic-ID payloads required by the metrics.
+
+        Args:
+            model (nn.Module): Quantizer under evaluation. May be wrapped by `nn.DataParallel`/`nn.DistributedDataParallel`.
+            inputs (dict[str, Union[torch.Tensor, Any]]): Batch prepared by :class:`QuantizerCollator`.
+            prediction_loss_only (bool): Whether to suppress prediction tensors and only output the loss.
+            ignore_keys (Optional[list[str]]): Present for :class:`~transformers.Trainer` compatibility; unused.
+
+        Returns:
+            tuple[Optional[torch.Tensor], Optional[tuple[torch.Tensor, ...]], Optional[Int[torch.Tensor, "B"]]]:
+                `(loss, payload, labels)` where `payload` matches the tuple expected by
+                :func:`compute_quantizer_metrics` and `labels` is just the detached `item_id` tensor.
+        """
+
+        inputs = self._prepare_inputs(inputs)
+
+        label_tensor = inputs[self.label_names[0]]
+        assert isinstance(label_tensor, torch.Tensor), "Item IDs must be a tensor."
+        labels: Int[torch.Tensor, "B"] = label_tensor.detach()
+
+        with torch.no_grad():
+            num_items_in_batch = self._get_num_items_in_batch([inputs], self.args.device)
+            loss, outputs = self.compute_loss(
+                model,
+                inputs,
+                return_outputs=True,
+                num_items_in_batch=num_items_in_batch,  # type: ignore - num_items_in_batch can be int
+            )
+            loss = loss.detach().mean() if loss is not None else None
+
+        if prediction_loss_only:  # pragma: no cover - prediction loss only
+            return loss, None, None
+
+        assert isinstance(outputs, QuantizerOutput)
+        predictions = tuple(t.detach() for t in self._build_prediction_outputs(outputs, inputs))
+
+        return loss, predictions, labels

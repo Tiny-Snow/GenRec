@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional, Callable, Tuple
 
 from jaxtyping import Float, Int
@@ -12,6 +13,7 @@ __all__ = [
     "LearnableInputPositionalEmbedding",
     "RelativeBucketedTimeAndPositionAttentionBias",
     "RotaryEmbedding",
+    "T5RelativePositionBias",
     "apply_rotary_pos_emb",
 ]
 
@@ -242,3 +244,119 @@ def apply_rotary_pos_emb(
     query_rotated = (query * cos) + (rotate_half(query) * sin)
     key_rotated = (key * cos) + (rotate_half(key) * sin)
     return query_rotated, key_rotated
+
+
+class T5RelativePositionBias(nn.Module):
+    """T5 relative position bias module.
+
+    References:
+    - Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer. JMLR '20.
+    """
+
+    def __init__(
+        self,
+        num_buckets: int,
+        max_distance: int,
+        num_heads: int,
+        is_bidirectional: bool,
+    ) -> None:
+        """Initializes T5RelativePositionBias module.
+
+        Args:
+            num_buckets (int): Number of relative position buckets.
+            max_distance (int): Maximum distance for relative positions.
+            num_heads (int): Number of attention heads.
+            is_bidirectional (bool): Whether the attention is bidirectional.
+        """
+        super().__init__()
+        self.num_buckets = num_buckets
+        self.max_distance = max_distance
+        self.num_heads = num_heads
+        self.relative_attention_bias = nn.Embedding(num_buckets, num_heads)
+        self.is_bidirectional = is_bidirectional
+
+    @staticmethod
+    def _relative_position_bucket(
+        relative_position: Int[torch.Tensor, "..."],
+        bidirectional: bool,
+        num_buckets: int,
+        max_distance: int,
+    ) -> Int[torch.Tensor, "..."]:
+        """Converts relative position to a bucket number for relative attention.
+
+        Args:
+            relative_position (Int[torch.Tensor, "..."]): Relative position, which is
+                defined as the distance from the query position to the key position,
+                i.e., key_pos - query_pos.
+            bidirectional (bool): Whether the attention is bidirectional.
+            num_buckets (int): Number of relative position buckets.
+            max_distance (int): Maximum distance for relative positions.
+
+        Returns:
+            Int[torch.Tensor, "..."]: Bucketed relative position tensor, within [0, num_buckets).
+        """
+        relative_buckets = 0
+        if bidirectional:  # both directions use half of the buckets
+            num_buckets //= 2
+            relative_buckets += (relative_position > 0).to(torch.long) * num_buckets
+            relative_position = torch.abs(relative_position)
+        else:  # decoder-only attention
+            relative_position = -torch.min(relative_position, torch.zeros_like(relative_position))
+
+        # half of the buckets are for exact increments in positions
+        max_exact = num_buckets // 2
+        is_small = relative_position < max_exact
+
+        # the other half of the buckets are for logarithmically bigger bins in positions up to max_distance
+        # i.e., N + log(relative_position / N) / log(max_distance / N) * N, where N = num_buckets / 2
+        # if relative_position > max_distance, just put it in the last bucket
+        relative_position_if_large = max_exact + (
+            torch.log(relative_position.float() / max_exact)
+            / math.log(max_distance / max_exact)
+            * (num_buckets - max_exact)
+        ).to(torch.long)
+        relative_position_if_large = torch.min(
+            relative_position_if_large, torch.full_like(relative_position_if_large, num_buckets - 1)
+        )
+
+        relative_buckets += torch.where(is_small, relative_position, relative_position_if_large)
+        return relative_buckets
+
+    def forward(
+        self,
+        query_length: int,
+        key_length: int,
+        cache_position: Optional[Int[torch.Tensor, "q_len"]] = None,
+        device: Optional[torch.device] = None,
+    ) -> Float[torch.Tensor, "1 H q_len k_len"]:
+        """Computes T5 relative position bias.
+
+        Args:
+            query_length (int): Length of the query sequence.
+            key_length (int): Length of the key sequence.
+            cache_position (Optional[Int[torch.Tensor, "q_len"]]): Optional position IDs used to compute
+                relative positions when caching past key/values in the decoder. If provided, it should
+                contain the absolute positions of the current query tokens. Default is None.
+            device (Optional[torch.device]): Device identifier to perform computations on.
+
+        Returns:
+            Float[torch.Tensor, "1 H q_len k_len"]: Relative position bias tensor of shape
+                (1, num_heads, query_length, key_length). If `cache_position` is provided,
+                `q_len` corresponds to the length of `cache_position`; otherwise, it equals
+                `query_length`.
+        """
+        device = self.relative_attention_bias.weight.device if device is None else device
+        if cache_position is None:
+            query_pos: Int[torch.Tensor, "q_len"] = torch.arange(query_length, dtype=torch.long, device=device)
+        else:
+            query_pos = cache_position.to(device)
+        key_pos: Int[torch.Tensor, "k_len"] = torch.arange(key_length, dtype=torch.long, device=device)
+        rel_pos: Int[torch.Tensor, "q_len k_len"] = key_pos[None, :] - query_pos[:, None]
+        rel_pos_buckets: Int[torch.Tensor, "q_len k_len"] = self._relative_position_bucket(
+            rel_pos,
+            bidirectional=self.is_bidirectional,
+            num_buckets=self.num_buckets,
+            max_distance=self.max_distance,
+        )
+        values: Float[torch.Tensor, "q_len k_len H"] = self.relative_attention_bias(rel_pos_buckets)
+        return values.permute(2, 0, 1).unsqueeze(0)
