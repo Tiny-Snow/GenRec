@@ -39,7 +39,8 @@ def compute_seqrec_metrics(
 
     Args:
         prediction (EvalPrediction): Object containing model predictions and labels. Predictions are
-            expected to be the precomputed top-k item indices per user (shape: ``[num_users, max_k]``).
+            expected to be the top-k item indices per user, of shape (num_users, max_k). Labels are
+            expected to be the ground-truth item indices of shape (num_users,).
         train_dataset (SeqRecDataset): Dataset used during training; required for global metrics
             such as popularity-based measurements.
         top_k (Sequence[int]): Cutoff values for computing top-K metrics, determining how many
