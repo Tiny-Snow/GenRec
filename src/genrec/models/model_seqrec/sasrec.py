@@ -79,6 +79,7 @@ class SASRecModel(SeqRecModel[SASRecModelConfig, SASRecModelOutput]):
     """
 
     config_class = SASRecModelConfig
+    supports_gradient_checkpointing = True
 
     def __init__(self, config: SASRecModelConfig) -> None:
         """Initializes SASRec model with the given configuration."""

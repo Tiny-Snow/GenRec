@@ -83,6 +83,7 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
     """
 
     config_class = SASRecSpringModelConfig
+    supports_gradient_checkpointing = True
 
     def __init__(self, config: SASRecSpringModelConfig) -> None:
         """Initializes SASRec model with the given configuration."""

@@ -97,6 +97,7 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
     """
 
     config_class = HSTUSpringModelConfig
+    supports_gradient_checkpointing = True
 
     def __init__(self, config: HSTUSpringModelConfig) -> None:
         """Initializes HSTU model with the given configuration."""

@@ -182,7 +182,7 @@ class SeqRecModel(PreTrainedModel, Generic[_SeqRecModelConfig, _SeqRecOutput], A
     """
 
     config_class: Type[_SeqRecModelConfig]
-    supports_gradient_checkpointing = True
+    supports_gradient_checkpointing = False  # change to True if implemented in subclass
 
     def __init__(self, config: _SeqRecModelConfig) -> None:
         """Initializes the sequential recommendation model.
