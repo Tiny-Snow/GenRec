@@ -38,9 +38,9 @@ class TIGERModelConfig(GenRecModelConfig):
 
     def __init__(
         self,
-        num_heads: int,
-        num_encoder_layers: int,
-        num_decoder_layers: int,
+        num_heads: int = 4,
+        num_encoder_layers: int = 4,
+        num_decoder_layers: int = 4,
         linear_dropout: float = 0.0,
         attention_dropout: float = 0.0,
         attention_bias: bool = False,
@@ -53,10 +53,9 @@ class TIGERModelConfig(GenRecModelConfig):
         """Initializes the configuration with model hyperparameters.
 
         Args:
-            hidden_size (int): Dimensionality of the model's hidden representations.
-            num_heads (int): Number of attention heads.
-            num_encoder_layers (int): Number of layers in the encoder.
-            num_decoder_layers (int): Number of layers in the decoder.
+            num_heads (int): Number of attention heads. Default is 4.
+            num_encoder_layers (int): Number of layers in the encoder. Default is 4.
+            num_decoder_layers (int): Number of layers in the decoder. Default is 4.
             linear_dropout (float): Dropout rate for the output of attention and feed-forward network. Default is 0.0.
             attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
             attention_bias (bool): Whether to include bias terms in the attention projections. Default is False.
@@ -142,7 +141,7 @@ class TIGERStack(PreTrainedModel, ShiftRightMixin[TIGERModelConfig]):
             ]
         )
         self.final_layer_norm = RMSNorm(config.hidden_size, eps=1e-6)
-        self.dropout = nn.Dropout(config.dropout_rate)
+        self.dropout = nn.Dropout(config.linear_dropout)
 
         self.rotary_emb = RotaryEmbedding(head_dim=config.head_dim)
 
