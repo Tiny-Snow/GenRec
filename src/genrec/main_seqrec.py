@@ -22,7 +22,7 @@ Expected configuration schema::
     trainer:
         type: bce
         config:
-            num_train_epochs: 10
+            num_train_epochs: 200
             ...  # trainer hyper-parameters
 """
 
