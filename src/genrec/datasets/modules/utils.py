@@ -47,22 +47,25 @@ def pad_batch(
     if len(all_keys) == 0:
         return {}
 
-    batch_max_length = max(sample[key].shape[0] for sample in batch for key in all_keys)
-    if max_length is not None:
-        batch_max_length = max(batch_max_length, max_length)
-
-    if pad_to_multiple_of is not None and pad_to_multiple_of > 0:
-        if batch_max_length % pad_to_multiple_of != 0:
-            batch_max_length = ((batch_max_length // pad_to_multiple_of) + 1) * pad_to_multiple_of
+    key_max_lengths: Dict[str, int] = {}
+    for key in all_keys:
+        key_max_length = max(sample[key].shape[0] for sample in batch)
+        if max_length is not None:
+            key_max_length = max(key_max_length, max_length)
+        if pad_to_multiple_of is not None and pad_to_multiple_of > 0:
+            if key_max_length % pad_to_multiple_of != 0:
+                key_max_length = ((key_max_length // pad_to_multiple_of) + 1) * pad_to_multiple_of
+        key_max_lengths[key] = key_max_length
 
     padded_batch: Dict[str, np.ndarray] = {}
     for key in all_keys:
         pad_value = pad_values.get(key, 0)
+        target_length = key_max_lengths[key]
         field_rows: List[np.ndarray] = []
         for sample in batch:
             array = sample[key]
             seq_len = array.shape[0]
-            pad_length = batch_max_length - seq_len
+            pad_length = target_length - seq_len
             if direction == "left":
                 pad_width = (pad_length, 0)
             else:
