@@ -2,11 +2,12 @@
 
 __all__ = []
 
-from .attention import MaskedHSTUAttention, MaskedSelfAttentionWithRoPE
+from .attention import MaskedHSTUAttention, MaskedSelfAttentionWithRoPE, T5Attention
 
 __all__ += [
     "MaskedHSTUAttention",
     "MaskedSelfAttentionWithRoPE",
+    "T5Attention",
 ]
 
 from .feedforward import FeedForwardNetwork, MLP, SwiGLU
@@ -25,18 +26,20 @@ __all__ += [
 
 from .layers import (
     LlamaDecoderLayer,
-    SequentialTransductionUnit,
     SpringLlamaDecoderLayer,
+    SequentialTransductionUnit,
     SpringSequentialTransductionUnit,
+    T5Block,
     spring_attention_weight_spectral_norm,
     spring_power_iteration,
 )
 
 __all__ += [
     "LlamaDecoderLayer",
-    "SequentialTransductionUnit",
     "SpringLlamaDecoderLayer",
+    "SequentialTransductionUnit",
     "SpringSequentialTransductionUnit",
+    "T5Block",
     "spring_attention_weight_spectral_norm",
     "spring_power_iteration",
 ]
@@ -45,6 +48,7 @@ from .posemb import (
     LearnableInputPositionalEmbedding,
     RelativeBucketedTimeAndPositionAttentionBias,
     RotaryEmbedding,
+    T5RelativePositionBias,
     apply_rotary_pos_emb,
 )
 
@@ -52,6 +56,7 @@ __all__ += [
     "LearnableInputPositionalEmbedding",
     "RelativeBucketedTimeAndPositionAttentionBias",
     "RotaryEmbedding",
+    "T5RelativePositionBias",
     "apply_rotary_pos_emb",
 ]
 

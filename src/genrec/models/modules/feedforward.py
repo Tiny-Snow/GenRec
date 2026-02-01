@@ -24,6 +24,8 @@ class FeedForwardNetwork(nn.Module):
         hidden_size: int,
         intermediate_size: int,
         ffn_bias: bool = False,
+        activation: nn.Module = nn.ReLU(),
+        dropout: float = 0.0,
     ) -> None:
         """Initializes FeedForwardNetwork module.
 
@@ -31,6 +33,8 @@ class FeedForwardNetwork(nn.Module):
             hidden_size (int): Dimensionality of the input and output.
             intermediate_size (int): Dimensionality of the intermediate layer.
             ffn_bias (bool): Whether to include bias terms in the linear projections. Default is False.
+            activation (nn.Module): Activation function to use between layers. Default is ReLU.
+            dropout (float): Dropout rate to apply after the activation. Default is 0.0.
         """
         super().__init__()
         self.hidden_size = hidden_size
@@ -38,7 +42,8 @@ class FeedForwardNetwork(nn.Module):
 
         self.fc1 = nn.Linear(hidden_size, intermediate_size, bias=ffn_bias)
         self.fc2 = nn.Linear(intermediate_size, hidden_size, bias=ffn_bias)
-        self.act_fn = nn.functional.gelu
+        self.activation = activation
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: Float[torch.Tensor, "... d"]) -> Float[torch.Tensor, "... d"]:
         """Forward pass for FeedForwardNetwork.
@@ -49,7 +54,7 @@ class FeedForwardNetwork(nn.Module):
         Returns:
             Float[torch.Tensor, "... d"]: Output tensor of shape (..., hidden_size).
         """
-        return self.fc2(self.act_fn(self.fc1(x)))
+        return self.fc2(self.dropout(self.activation(self.fc1(x))))
 
 
 class MLP(nn.Module):
@@ -101,6 +106,7 @@ class SwiGLU(nn.Module):
         hidden_size: int,
         intermediate_size: int,
         ffn_bias: bool = False,
+        dropout: float = 0.0,
     ) -> None:
         """Initializes SwiGLU module.
 
@@ -108,6 +114,7 @@ class SwiGLU(nn.Module):
             hidden_size (int): Dimensionality of the input and output.
             intermediate_size (int): Dimensionality of the intermediate layer.
             ffn_bias (bool): Whether to include bias terms in the linear projections. Default is False.
+            dropout (float): Dropout rate to apply after the activation. Default is 0.0.
         """
         super().__init__()
         self.hidden_size = hidden_size
@@ -117,6 +124,7 @@ class SwiGLU(nn.Module):
         self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=ffn_bias)
         self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=ffn_bias)
         self.act_fn = nn.functional.silu
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: Float[torch.Tensor, "... d"]) -> Float[torch.Tensor, "... d"]:
         """Forward pass for SwiGLU.
@@ -127,4 +135,4 @@ class SwiGLU(nn.Module):
         Returns:
             Float[torch.Tensor, "... d"]: Output tensor of shape (..., hidden_size).
         """
-        return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        return self.down_proj(self.dropout(self.act_fn(self.gate_proj(x)) * self.up_proj(x)))

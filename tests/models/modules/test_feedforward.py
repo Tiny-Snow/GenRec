@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 
 from genrec.models.modules.feedforward import FeedForwardNetwork, SwiGLU
 
@@ -38,3 +39,27 @@ def test_swiglu_backward_pass_with_bias() -> None:
     assert outputs.shape == inputs.shape
     outputs.mean().backward()
     assert inputs.grad is not None
+
+
+def test_feedforward_network_respects_custom_activation() -> None:
+    hidden_size = 2
+    intermediate_size = 3
+    ffn = FeedForwardNetwork(
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+        ffn_bias=True,
+        activation=nn.Identity(),
+    )
+
+    with torch.no_grad():
+        ffn.fc1.weight.fill_(1.0)
+        ffn.fc1.bias.zero_()
+        ffn.fc2.weight.fill_(1.0)
+        ffn.fc2.bias.zero_()
+
+    inputs = torch.tensor([[[1.0, 2.0]]])
+    outputs = ffn(inputs)
+
+    # fc1: sum to 3 along hidden dims, replicated across intermediate_size; fc2: sums three 3's to 9 for each dim
+    expected = torch.full_like(inputs, 9.0)
+    torch.testing.assert_close(outputs, expected)
