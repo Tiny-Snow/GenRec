@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from transformers import EvalPrediction
 
-from genrec.models.model_seqrec.base import SeqRecModelConfig
+from genrec.models.model_seqrec.base import SeqRecModelConfig, SeqRecOutput
 from genrec.trainers.trainer_seqrec.base import compute_seqrec_metrics
 from genrec.trainers.trainer_seqrec.utils.evaluations import clip_top_k
 from genrec.trainers.trainer_seqrec.utils.callbacks import EpochIntervalEvalCallback
@@ -131,7 +131,7 @@ def test_seqrec_trainer_compute_loss_with_model_loss_and_outputs(
     inputs = collator(batch)
     num_items_in_batch = torch.tensor([dataset.seq_len, dataset.seq_len], dtype=torch.long)
 
-    loss, output_dict = trainer.compute_loss(
+    loss, outputs = trainer.compute_loss(
         trainer.model,
         inputs,
         return_outputs=True,
@@ -140,15 +140,9 @@ def test_seqrec_trainer_compute_loss_with_model_loss_and_outputs(
 
     expected_loss = 1.5 + 2.0 * args.model_loss_weight
     torch.testing.assert_close(loss, torch.tensor(expected_loss))
-    torch.testing.assert_close(output_dict["loss"], loss)
-    assert "topk_indices" in output_dict
-    assert output_dict["topk_indices"].shape == (len(batch), trainer.max_top_k)
+    assert isinstance(outputs, SeqRecOutput)
     forward_outputs = trainer.model(**inputs)
-    last_hidden = forward_outputs.last_hidden_state[:, -1, :]
-    item_embed_weight = trainer.model.item_embed_weight
-    expected_logits = last_hidden @ item_embed_weight.T
-    _, expected_topk = torch.topk(expected_logits, k=trainer.max_top_k, dim=1)
-    torch.testing.assert_close(output_dict["topk_indices"], expected_topk)
+    torch.testing.assert_close(outputs.last_hidden_state, forward_outputs.last_hidden_state)
     assert torch.equal(trainer.last_seen_num_items, num_items_in_batch)
 
 
@@ -221,8 +215,39 @@ def test_seqrec_trainer_compute_loss_without_model_loss_returns_outputs(
 
     loss, outputs = trainer.compute_loss(trainer.model, inputs, return_outputs=True)
     torch.testing.assert_close(loss, torch.tensor(0.6))
-    assert "topk_indices" in outputs
-    assert outputs["topk_indices"].shape == (len(batch), trainer.max_top_k)
+    assert isinstance(outputs, SeqRecOutput)
+
+
+def test_seqrec_trainer_prediction_step_returns_topk_indices(tmp_path: Path) -> None:
+    args = build_training_args(tmp_path, eval_interval=1)
+    model = DummySeqRecModel(SeqRecModelConfig(item_size=10, hidden_size=4))
+    dataset = DummySeqRecDataset(seq_len=2, num_negatives=1, item_size=model.config.item_size)
+    trainer = MinimalSeqRecTrainer(
+        model=model,
+        args=args,
+        data_collator=DummySeqRecCollator(),
+        train_dataset=dataset,
+        eval_dataset=dataset,
+    )
+
+    batch = [dataset[0], dataset[1]]
+    inputs = trainer.data_collator(batch)
+
+    loss, predictions, labels = trainer.prediction_step(
+        trainer.model,
+        inputs,
+        prediction_loss_only=False,
+    )
+
+    assert loss is not None
+    assert predictions is not None
+    assert labels is not None
+    assert predictions.shape == (len(batch), trainer.max_top_k)
+    forward_outputs = trainer.model(**inputs)
+    last_hidden = forward_outputs.last_hidden_state[:, -1, :]
+    logits = last_hidden @ trainer.model.item_embed_weight.T
+    _, expected_topk = torch.topk(logits, k=trainer.max_top_k, dim=1)
+    torch.testing.assert_close(predictions, expected_topk)
 
 
 def test_seqrec_trainer_normalizes_logits_when_enabled(tmp_path: Path) -> None:
@@ -240,8 +265,12 @@ def test_seqrec_trainer_normalizes_logits_when_enabled(tmp_path: Path) -> None:
     batch = [dataset[0], dataset[1]]
     inputs = trainer.data_collator(batch)
 
-    loss, output_dict = trainer.compute_loss(trainer.model, inputs, return_outputs=True)
-    torch.testing.assert_close(loss, torch.zeros((), device=loss.device))
+    loss, predictions, _ = trainer.prediction_step(
+        trainer.model,
+        inputs,
+        prediction_loss_only=False,
+    )
+    assert loss is not None
 
     forward_outputs = trainer.model(**inputs)
     last_hidden = forward_outputs.last_hidden_state[:, -1, :]
@@ -249,7 +278,8 @@ def test_seqrec_trainer_normalizes_logits_when_enabled(tmp_path: Path) -> None:
     expected_logits = F.normalize(last_hidden, p=2, dim=-1) @ F.normalize(item_embed_weight, p=2, dim=-1).T
 
     _, expected_topk = torch.topk(expected_logits, k=trainer.max_top_k, dim=1)
-    torch.testing.assert_close(output_dict["topk_indices"], expected_topk)
+    assert predictions is not None
+    torch.testing.assert_close(predictions, expected_topk)
 
 
 def test_seqrec_trainer_predict_returns_metrics(tmp_path: Path) -> None:

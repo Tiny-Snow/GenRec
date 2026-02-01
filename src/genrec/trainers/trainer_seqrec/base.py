@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Callable, Dict, Generic, List, Optional, Sequence, Tuple, Type, TypeVar, Union
 
-from jaxtyping import Float
+from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -266,7 +266,7 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         inputs: dict[str, Union[torch.Tensor, Any]],
         return_outputs: bool = False,
         num_items_in_batch: Optional[torch.Tensor] = None,
-    ) -> Union[Float[torch.Tensor, ""], Tuple[Float[torch.Tensor, ""], Dict[str, torch.Tensor]]]:
+    ) -> Union[Float[torch.Tensor, ""], Tuple[Float[torch.Tensor, ""], SeqRecOutput]]:
         """Computes the loss for a batch of inputs.
 
         Args:
@@ -278,11 +278,10 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
                 valid items in each sequence in the batch (excluding padding).
 
         Returns:
-            Union[Float[torch.Tensor, ""], Tuple[Float[torch.Tensor, ""], Dict[str, torch.Tensor]]]:
-                Either the scalar loss or a tuple containing the loss and a dictionary with
-                loss and top-k indices of predicted items when `return_outputs` is True. The loss
-                combines the model-specific loss (if provided) with the recommendation loss computed
-                via `compute_rec_loss`.
+            Union[Float[torch.Tensor, ""], Tuple[Float[torch.Tensor, ""], SeqRecOutput]]:
+                Either the scalar loss or a tuple containing the loss and the raw `SeqRecOutput`
+                when `return_outputs` is True. The loss combines the model-specific loss (if provided)
+                with the recommendation loss computed via `compute_rec_loss`.
         """
         model = model.module if hasattr(model, "module") else model  # type: ignore - for distributed training
         assert isinstance(model, SeqRecModel), "Model must be an instance of SeqRecModel."
@@ -300,27 +299,8 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
             loss = rec_loss
 
         if return_outputs:
-            last_step_hidden_states: Float[torch.Tensor, "B d"]
-            last_step_hidden_states = outputs.last_hidden_state[:, -1, :]
-            item_embed_weight: Float[torch.Tensor, "I+1 d"] = model.item_embed_weight
-
-            if self.args.norm_embeddings:
-                last_step_hidden_states = F.normalize(last_step_hidden_states, p=2, dim=-1)
-                item_embed_weight = F.normalize(item_embed_weight, p=2, dim=-1)
-
-            logits: Float[torch.Tensor, "B I+1"]
-            logits = last_step_hidden_states @ item_embed_weight.T
-
-            effective_top_k = max(1, min(self.max_top_k, self.item_size))
-            _, topk_indices = torch.topk(logits, k=effective_top_k, dim=-1)  # may predict padding index
-
-            output_dict: Dict[str, torch.Tensor] = {
-                "loss": loss,
-                "topk_indices": topk_indices.detach(),
-            }
-            return loss, output_dict
-        else:
-            return loss
+            return loss, outputs
+        return loss
 
     @abstractmethod
     def compute_rec_loss(  # pragma: no cover - abstract method
@@ -345,3 +325,74 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
             Float[torch.Tensor, ""]: Computed recommendation loss as a scalar tensor.
         """
         ...
+
+    def _compute_topk_indices(
+        self,
+        outputs: SeqRecOutput,
+        model: SeqRecModel[Any, Any],
+    ) -> Int[torch.Tensor, "B K"]:
+        """Compute top-K item predictions from the current model outputs."""
+
+        last_step_hidden_states: Float[torch.Tensor, "B d"]
+        last_step_hidden_states = outputs.last_hidden_state[:, -1, :]
+        item_embed_weight: Float[torch.Tensor, "I+1 d"] = model.item_embed_weight
+
+        if self.args.norm_embeddings:
+            last_step_hidden_states = F.normalize(last_step_hidden_states, p=2, dim=-1)
+            item_embed_weight = F.normalize(item_embed_weight, p=2, dim=-1)
+
+        logits: Float[torch.Tensor, "B I+1"]
+        logits = last_step_hidden_states @ item_embed_weight.T
+
+        effective_top_k = max(1, min(self.max_top_k, self.item_size))
+        _, topk_indices = torch.topk(logits, k=effective_top_k, dim=-1)  # may predict padding index
+
+        return topk_indices
+
+    def prediction_step(  # type: ignore[override]
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[list[str]] = None,
+    ) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """Evaluation forward pass that returns mean loss, top-K indices, and detached labels.
+
+        Args:
+            model (nn.Module): Model under evaluation. May be wrapped for distributed training.
+            inputs (dict[str, Union[torch.Tensor, Any]]): Batch produced by :class:`SeqRecCollator`.
+            prediction_loss_only (bool): Whether to skip prediction tensors and only surface the loss.
+            ignore_keys (Optional[list[str]]): Unused placeholder required by :class:`~transformers.Trainer`.
+
+        Returns:
+            tuple[Optional[torch.Tensor], Optional[Int[torch.Tensor, "B K"]], Optional[Int[torch.Tensor, "B L"]]]:
+                `(loss, topk_indices, labels)` where `loss` is the batch-averaged value, `topk_indices` matches
+                `max_top_k` from the trainer config, and `labels` mirrors the collator's ground-truth tensor.
+        """
+
+        inputs = self._prepare_inputs(inputs)
+
+        label_tensor = inputs[self.label_names[0]]
+        assert isinstance(label_tensor, torch.Tensor), "Labels must be a tensor."
+        labels: Int[torch.Tensor, "B L"] = label_tensor.detach()
+
+        with torch.no_grad():
+            num_items_in_batch = self._get_num_items_in_batch([inputs], self.args.device)
+            loss, outputs = self.compute_loss(
+                model,
+                inputs,
+                return_outputs=True,
+                num_items_in_batch=num_items_in_batch,  # type: ignore - num_items_in_batch can be int
+            )
+            loss = loss.detach().mean() if loss is not None else None
+
+        if prediction_loss_only:  # pragma: no cover - prediction loss only
+            return loss, None, None
+
+        unwrapped_model = model.module if hasattr(model, "module") else model  # type: ignore - distributed
+        assert isinstance(unwrapped_model, SeqRecModel)
+        assert isinstance(outputs, SeqRecOutput)
+        predictions: Int[torch.Tensor, "B K"]
+        predictions = self._compute_topk_indices(outputs, unwrapped_model).detach()
+
+        return loss, predictions, labels
