@@ -75,6 +75,7 @@ class GenRecModelConfig(PretrainedConfig):
         decoder_start_token_id: int = 0,
         pad_token_id: int = 0,
         tie_word_embeddings: bool = True,
+        use_cache: bool = True,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
@@ -86,6 +87,7 @@ class GenRecModelConfig(PretrainedConfig):
             decoder_start_token_id (int): The token ID to start decoding with. Default is 0.
             pad_token_id (int): The token ID used for padding sequences. Default is 0.
             tie_word_embeddings (bool): Whether to tie the input and output word embeddings. Default is True.
+            use_cache (bool): Whether the model should use past key values to speed up decoding. Default is True.
             **kwargs: Additional keyword arguments for the base `PretrainedConfig`.
         """
         super().__init__(
@@ -98,6 +100,7 @@ class GenRecModelConfig(PretrainedConfig):
 
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
+        self.use_cache = use_cache
 
         if "is_encoder_decoder" in kwargs:  # pragma: no cover - defensive check
             assert kwargs["is_encoder_decoder"] is True, "GenRecModel only supports encoder-decoder architectures."

@@ -2,9 +2,19 @@
 
 __all__ = []
 
-# from .trainer_genrec import ...
+from .trainer_genrec import (
+    GenRecTrainer,
+    GenRecTrainerFactory,
+    GenRecTrainingArguments,
+    GenRecTrainingArgumentsFactory,
+)
 
-__all__ += []
+__all__ += [
+    "GenRecTrainer",
+    "GenRecTrainerFactory",
+    "GenRecTrainingArguments",
+    "GenRecTrainingArgumentsFactory",
+]
 
 from .trainer_quantizer import (
     QuantizerTrainer,
@@ -20,7 +30,12 @@ __all__ += [
     "QuantizerTrainingArgumentsFactory",
 ]
 
-from .trainer_seqrec import SeqRecTrainer, SeqRecTrainerFactory, SeqRecTrainingArguments, SeqRecTrainingArgumentsFactory
+from .trainer_seqrec import (
+    SeqRecTrainer,
+    SeqRecTrainerFactory,
+    SeqRecTrainingArguments,
+    SeqRecTrainingArgumentsFactory,
+)
 
 __all__ += [
     "SeqRecTrainer",
