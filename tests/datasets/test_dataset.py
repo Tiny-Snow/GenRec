@@ -75,6 +75,13 @@ def _make_short_interaction_frame(length: int) -> pd.DataFrame:
     )
 
 
+def _make_sid_cache(item_pool: int, sid_width: int = 3) -> np.ndarray:
+    cache = np.zeros((item_pool + 1, sid_width), dtype=np.int64)
+    for item_id in range(1, item_pool + 1):
+        cache[item_id] = np.arange(item_id, item_id + sid_width, dtype=np.int64)
+    return cache
+
+
 def _expected_batch_sizes(dataset_len: int, batch_size: int) -> list[int]:
     full_batches, remainder = divmod(dataset_len, batch_size)
     sizes = [batch_size] * full_batches
@@ -83,19 +90,20 @@ def _expected_batch_sizes(dataset_len: int, batch_size: int) -> list[int]:
     return sizes
 
 
-def _assert_genrec_batches(loader: DataLoader, expected_sizes: list[int], num_negatives: int) -> None:
+def _assert_genrec_batches(loader: DataLoader, expected_sizes: list[int]) -> None:
     batches = list(loader)
     assert len(batches) == len(expected_sizes)
     for idx, batch in enumerate(batches):
         expected_size = expected_sizes[idx]
         assert batch["user_id"].shape == (expected_size,)
-        assert batch["labels"].shape == (expected_size,)
+        assert batch["labels"].ndim == 2
+        sid_width = batch["labels"].shape[1]
+        assert batch["input_ids"].shape == batch["attention_mask"].shape
         assert batch["input_ids"].shape[0] == expected_size
-        assert batch["attention_mask"].shape == batch["input_ids"].shape
-        assert batch["timestamps"].shape == batch["input_ids"].shape
-        assert batch["input_ids"].shape[1] <= 4
-        assert batch["negative_item_ids"].shape == (expected_size, num_negatives)
-        assert batch["negative_item_ids"].dtype == torch.int32
+        assert batch["input_item_ids"].shape == batch["timestamps"].shape
+        assert batch["input_item_ids"].shape[0] == expected_size
+        assert batch["input_ids"].shape[1] == batch["input_item_ids"].shape[1] * sid_width
+        assert batch["labels"].shape == (expected_size, sid_width)
 
 
 def _assert_seqrec_batches(loader: DataLoader, expected_sizes: list[int], num_negatives: int) -> None:
@@ -161,12 +169,7 @@ def textual_frame() -> pd.DataFrame:
 
 @pytest.fixture()
 def sid_cache() -> np.ndarray:
-    sid_width = 3
-    cache = np.zeros((8, sid_width), dtype=np.int64)
-    # Populate rows 1..7 with unique token patterns.
-    for item_id in range(1, 8):
-        cache[item_id] = np.array([item_id, item_id + 10, item_id + 20], dtype=np.int64)
-    return cache
+    return _make_sid_cache(item_pool=7, sid_width=3)
 
 
 @pytest.fixture()
@@ -244,14 +247,16 @@ def test_genrec_dataset_examples(genrec_dataset, sid_cache, dummy_encoder):
     assert genrec_dataset.user_size == 3
     assert genrec_dataset.item_size == 7
     assert genrec_dataset.sid_width == sid_cache.shape[1]
+    assert genrec_dataset.sid_cache.shape == sid_cache.shape
     assert genrec_dataset.textual_embedding_dim == dummy_encoder.embedding_dim
 
     example = genrec_dataset[0]
     assert example.user_id in {0, 1, 2}
-    assert example.input_ids.ndim == 1
-    assert example.timestamps.shape == example.input_ids.shape
-    assert example.input_sid_tokens.shape[1] == sid_cache.shape[1]
-    assert example.target_sid_tokens.shape == (sid_cache.shape[1],)
+    assert example.input_item_ids.ndim == 1
+    assert example.timestamps.shape == example.input_item_ids.shape
+    assert example.input_ids.shape == (example.input_item_ids.shape[0] * sid_cache.shape[1],)
+    assert example.labels.shape == (sid_cache.shape[1],)
+    assert example.label_item_ids in genrec_dataset.user_positive_items[example.user_id]
     assert example.input_embeddings.shape[1] == dummy_encoder.embedding_dim
     assert example.target_embedding.shape[0] == dummy_encoder.embedding_dim
 
@@ -269,55 +274,42 @@ def test_genrec_dataset_examples(genrec_dataset, sid_cache, dummy_encoder):
 
 
 def test_genrec_collator_with_dataloader(genrec_dataset, dummy_encoder):
-    config = GenRecCollatorConfig(num_negative_samples=2, need_sid_tokens=True, need_embeddings=True)
+    config = GenRecCollatorConfig(need_embeddings=True)
     collator = GenRecCollator(genrec_dataset, config=config, seed=123)
-
-    max_item_id = genrec_dataset.item_size
-
-    def fake_negative_sampler(history, num_samples, batch_seed=None):
-        return np.full((history.shape[0], num_samples), fill_value=max_item_id, dtype=np.int32)
-
-    collator._negative_sampler = fake_negative_sampler  # type: ignore[assignment]
 
     loader = DataLoader(genrec_dataset, batch_size=2, collate_fn=collator)
     batch = next(iter(loader))
 
     assert batch["input_ids"].shape[0] == 2
     assert batch["attention_mask"].shape == batch["input_ids"].shape
-    assert batch["timestamps"].shape == batch["input_ids"].shape
-    assert batch["input_sid_tokens"].shape[2] == genrec_dataset.sid_width
-    assert batch["target_sid_tokens"].shape == (2, genrec_dataset.sid_width)
+    assert batch["input_item_ids"].shape == batch["timestamps"].shape
+    assert batch["input_ids"].shape[1] == batch["input_item_ids"].shape[1] * genrec_dataset.sid_width
+    assert batch["labels"].shape == (2, genrec_dataset.sid_width)
+    assert batch["label_item_ids"].shape == (2,)
     assert batch["input_embeddings"].shape[2] == dummy_encoder.embedding_dim
     assert batch["target_embedding"].shape == (2, dummy_encoder.embedding_dim)
-    assert batch["negative_item_ids"].shape == (2, 2)
-    assert batch["negative_sid_tokens"].shape == (2, 2, genrec_dataset.sid_width)
-    assert batch["negative_embeddings"].shape == (2, 2, dummy_encoder.embedding_dim)
 
     for tensor in batch.values():
         assert isinstance(tensor, torch.Tensor)
 
 
-def test_genrec_collator_without_sid_or_embedding_features(interaction_frame):
+def test_genrec_collator_without_sid_or_embedding_features(interaction_frame, sid_cache):
     dataset = GenRecDataset(
         interaction_data_path=interaction_frame,
         split=DatasetSplitLiteral.TRAIN,
         max_seq_length=3,
         min_seq_length=1,
+        sid_cache=sid_cache,
     )
-    config = GenRecCollatorConfig(num_negative_samples=1, need_sid_tokens=False, need_embeddings=False)
+    config = GenRecCollatorConfig(need_embeddings=False)
     collator = GenRecCollator(dataset, config=config, seed=11)
-
-    def fake_negative_sampler(history, num_samples, batch_seed=None):
-        return np.full((history.shape[0], num_samples), fill_value=dataset.item_size, dtype=np.int32)
-
-    collator._negative_sampler = fake_negative_sampler  # type: ignore[assignment]
 
     loader = DataLoader(dataset, batch_size=2, collate_fn=collator)
     batch = next(iter(loader))
 
-    assert batch["negative_item_ids"].shape == (2, 1)
-    assert "negative_sid_tokens" not in batch
-    assert "negative_embeddings" not in batch
+    assert "input_embeddings" not in batch
+    assert "target_embedding" not in batch
+    assert batch["labels"].shape[1] == sid_cache.shape[1]
 
 
 def test_seqrec_dataset_and_collator(seqrec_dataset):
@@ -366,12 +358,15 @@ def test_quantizer_dataset_train_item_popularity_defaults_to_global(quantizer_da
         (DatasetSplitLiteral.TEST, [1, 2, 3, 4], 5),
     ],
 )
-def test_genrec_iter_split_handles_eval_and_test(interaction_frame, split, expected_context, expected_target):
+def test_genrec_iter_split_handles_eval_and_test(
+    interaction_frame, sid_cache, split, expected_context, expected_target
+):
     dataset = GenRecDataset(
         interaction_data_path=interaction_frame,
         split=split,
         max_seq_length=5,
         min_seq_length=1,
+        sid_cache=sid_cache,
     )
     items = dataset.user_interactions[0]
     times = dataset.user_interaction_timestamps[0]
@@ -388,6 +383,8 @@ def test_genrec_iter_split_handles_eval_and_test(interaction_frame, split, expec
 def test_genrec_item_size_prefers_textual_titles_without_encoding(dummy_encoder):
     interaction_frame = _make_short_interaction_frame(length=3)
     textual_frame = _make_textual_frame(item_pool=6)
+    sid_cache_short = _make_sid_cache(item_pool=3)
+    sid_cache_text = _make_sid_cache(item_pool=6)
 
     dataset_text_only = GenRecDataset(
         interaction_data_path=interaction_frame,
@@ -395,6 +392,7 @@ def test_genrec_item_size_prefers_textual_titles_without_encoding(dummy_encoder)
         max_seq_length=4,
         min_seq_length=1,
         textual_data_path=textual_frame,
+        sid_cache=sid_cache_text,
     )
     assert dataset_text_only.item_size == 6
     assert dataset_text_only.item_textual_embeddings is None
@@ -404,6 +402,7 @@ def test_genrec_item_size_prefers_textual_titles_without_encoding(dummy_encoder)
         split=DatasetSplitLiteral.TRAIN,
         max_seq_length=4,
         min_seq_length=1,
+        sid_cache=sid_cache_short,
     )
     assert dataset_no_textual.item_size == 3
 
@@ -414,6 +413,7 @@ def test_genrec_item_size_prefers_textual_titles_without_encoding(dummy_encoder)
         min_seq_length=1,
         textual_data_path=textual_frame,
         lm_encoder=dummy_encoder,
+        sid_cache=sid_cache_text,
     )
     assert dataset_with_encoder.item_size == 6
     assert dataset_with_encoder.item_textual_embeddings is not None
@@ -425,6 +425,7 @@ def test_genrec_tail_truncation_keeps_recent_history_only():
     raw_items = np.array(frame.iloc[0]["ItemID"], dtype=np.int64)
     raw_times = np.array(frame.iloc[0]["Timestamp"], dtype=np.int64)
     max_seq_length = 4
+    sid_cache = _make_sid_cache(item_pool=int(raw_items.max()))
 
     dataset = GenRecDataset(
         interaction_data_path=frame,
@@ -432,6 +433,7 @@ def test_genrec_tail_truncation_keeps_recent_history_only():
         max_seq_length=max_seq_length,
         min_seq_length=1,
         truncation_strategy="tail",
+        sid_cache=sid_cache,
     )
 
     truncated_items, truncated_times = dataset._tail_truncate(raw_items, raw_times)
@@ -439,7 +441,7 @@ def test_genrec_tail_truncation_keeps_recent_history_only():
     np.testing.assert_array_equal(truncated_times, raw_times[-(max_seq_length + 3) :])
     assert len(dataset) == max_seq_length
 
-    concatenated_contexts = np.concatenate([example.input_ids for example in dataset])
+    concatenated_contexts = np.concatenate([example.input_item_ids for example in dataset])
     assert concatenated_contexts.min() == truncated_items[0]
 
 
@@ -448,6 +450,7 @@ def test_genrec_slide_truncation_retains_full_history_for_windows():
     raw_items = np.array(frame.iloc[0]["ItemID"], dtype=np.int64)
     raw_times = np.array(frame.iloc[0]["Timestamp"], dtype=np.int64)
     max_seq_length = 4
+    sid_cache = _make_sid_cache(item_pool=int(raw_items.max()))
 
     dataset = GenRecDataset(
         interaction_data_path=frame,
@@ -455,6 +458,7 @@ def test_genrec_slide_truncation_retains_full_history_for_windows():
         max_seq_length=max_seq_length,
         min_seq_length=1,
         truncation_strategy="slide",
+        sid_cache=sid_cache,
     )
 
     truncated_items, truncated_times = dataset._tail_truncate(raw_items, raw_times)
@@ -462,9 +466,9 @@ def test_genrec_slide_truncation_retains_full_history_for_windows():
     np.testing.assert_array_equal(truncated_times, raw_times)
     assert len(dataset) == raw_items.shape[0] - 3
 
-    concatenated_contexts = np.concatenate([example.input_ids for example in dataset])
+    concatenated_contexts = np.concatenate([example.input_item_ids for example in dataset])
     assert concatenated_contexts.min() == raw_items[0]
-    assert dataset[0].input_ids.tolist() == [int(raw_items[0])]
+    assert dataset[0].input_item_ids.tolist() == [int(raw_items[0])]
 
 
 @pytest.mark.parametrize("dataset_fixture", ["genrec_dataset", "seqrec_dataset"])
@@ -496,11 +500,13 @@ def test_quantizer_dataset_and_collator(quantizer_dataset, dummy_encoder):
 
 def test_genrec_iter_split_requires_minimum_length_for_validation():
     frame = _make_short_interaction_frame(length=2)
+    sid_cache = _make_sid_cache(item_pool=2)
     dataset = GenRecDataset(
         interaction_data_path=frame,
         split=DatasetSplitLiteral.VALIDATION,
         max_seq_length=3,
         min_seq_length=1,
+        sid_cache=sid_cache,
     )
     items = dataset.user_interactions[0]
     times = dataset.user_interaction_timestamps[0]
@@ -509,11 +515,13 @@ def test_genrec_iter_split_requires_minimum_length_for_validation():
 
 def test_genrec_iter_split_requires_minimum_length_for_test():
     frame = _make_short_interaction_frame(length=1)
+    sid_cache = _make_sid_cache(item_pool=1)
     dataset = GenRecDataset(
         interaction_data_path=frame,
         split=DatasetSplitLiteral.TEST,
         max_seq_length=3,
         min_seq_length=1,
+        sid_cache=sid_cache,
     )
     items = dataset.user_interactions[0]
     times = dataset.user_interaction_timestamps[0]
@@ -523,12 +531,13 @@ def test_genrec_iter_split_requires_minimum_length_for_test():
 def test_large_scale_multiworker_uniform_negative_sampler():
     num_users = 10032
     batch_size = 4096
-    num_negatives = 256
     seq_len = 4
     item_pool = num_users
+    sid_width = 2
 
     interactions = _make_large_interaction_frame(num_users, seq_len=seq_len, item_pool=item_pool)
     textual = _make_textual_frame(item_pool)
+    sid_cache = _make_sid_cache(item_pool=item_pool, sid_width=sid_width)
     expected_sizes = _expected_batch_sizes(num_users, batch_size)
     expected_batches = math.ceil(num_users / batch_size)
     assert len(expected_sizes) == expected_batches
@@ -545,19 +554,11 @@ def test_large_scale_multiworker_uniform_negative_sampler():
             split=split,
             max_seq_length=3,
             min_seq_length=1,
+            sid_cache=sid_cache,
         )
         assert len(dataset) == num_users
         assert dataset.split == split
-        collator = GenRecCollator(
-            dataset,
-            config=GenRecCollatorConfig(
-                num_negative_samples=num_negatives,
-                need_sid_tokens=False,
-                need_embeddings=False,
-            ),
-            seed=2025,
-        )
-        assert collator._negative_sampler.__class__.__name__ == "UniformNegativeSampler"
+        collator = GenRecCollator(dataset, config=GenRecCollatorConfig(need_embeddings=False), seed=2025)
         loader = DataLoader(
             dataset,
             batch_size=batch_size,
@@ -566,7 +567,7 @@ def test_large_scale_multiworker_uniform_negative_sampler():
             shuffle=False,
             multiprocessing_context="fork",
         )
-        _assert_genrec_batches(loader, expected_sizes, num_negatives)
+        _assert_genrec_batches(loader, expected_sizes)
         del loader
 
     for split in splits:
@@ -580,7 +581,7 @@ def test_large_scale_multiworker_uniform_negative_sampler():
         assert dataset.split == split
         collator = SeqRecCollator(
             dataset,
-            config=SeqRecCollatorConfig(num_negative_samples=num_negatives),
+            config=SeqRecCollatorConfig(num_negative_samples=256),
             seed=2025,
         )
         assert collator._negative_sampler.__class__.__name__ == "UniformNegativeSampler"
@@ -592,7 +593,7 @@ def test_large_scale_multiworker_uniform_negative_sampler():
             shuffle=False,
             multiprocessing_context="fork",
         )
-        _assert_seqrec_batches(loader, expected_sizes, num_negatives)
+        _assert_seqrec_batches(loader, expected_sizes, 256)
         del loader
 
     encoder = DummyEncoder()
