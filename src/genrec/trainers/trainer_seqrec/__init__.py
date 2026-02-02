@@ -53,6 +53,13 @@ __all__ += [
     "BCEReSNSeqRecTrainingArguments",
 ]
 
+from .bce_tpab import BCETPABSeqRecTrainer, BCETPABSeqRecTrainingArguments
+
+__all__ += [
+    "BCETPABSeqRecTrainer",
+    "BCETPABSeqRecTrainingArguments",
+]
+
 from .sl import SLSeqRecTrainer, SLSeqRecTrainingArguments
 
 __all__ += [
