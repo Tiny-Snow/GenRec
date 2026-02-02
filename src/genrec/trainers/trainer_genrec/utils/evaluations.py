@@ -195,7 +195,7 @@ def calc_metric_hr(
     """
     K = topk_sids.shape[1]
     hits = (topk_sids == labels.unsqueeze(1)).all(dim=-1).float()
-    hr = hits.mean().item()
+    hr = hits.mean().item() * K
     return {f"hr@{K}": hr}
 
 

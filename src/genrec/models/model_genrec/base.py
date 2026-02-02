@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, Optional, Type, TypeVar, Union
+from typing import Any, Callable, Dict, Generic, Optional, Type, TypeVar, Union
 
 from jaxtyping import Float, Int
 import torch
@@ -279,14 +279,22 @@ class GenRecModel(
         self.encoder.set_input_embeddings(value)
         self.decoder.set_input_embeddings(value)
 
+    def get_output_embeddings(self) -> nn.Module:
+        """Returns the output (LM head) projection."""
+        return self.lm_head
+
+    def set_output_embeddings(self, new_embeddings: nn.Module) -> None:
+        """Sets the output (LM head) projection."""
+        self.lm_head = new_embeddings
+
     def get_encoder(self) -> nn.Module:  # pragma: no cover - method in abstract base class
         """Returns the encoder module."""
         return self.encoder
 
     def forward(  # pragma: no cover - method in abstract base class
         self,
-        input_ids: Int[torch.Tensor, "B L_enc"],
-        attention_mask: Int[torch.Tensor, "B L_enc"],
+        input_ids: Optional[Int[torch.Tensor, "B L_enc"]] = None,
+        attention_mask: Optional[Int[torch.Tensor, "B L_enc"]] = None,
         decoder_input_ids: Optional[Int[torch.Tensor, "B L_dec"]] = None,
         decoder_attention_mask: Optional[Int[torch.Tensor, "B L_dec"]] = None,
         encoder_outputs: Optional[_GenRecEncoderDecoderOutput] = None,
@@ -307,7 +315,7 @@ class GenRecModel(
         subclasses to implement specific model architectures.
 
         Args:
-            input_ids (Int[torch.Tensor, "B L_enc"]): Input token sequences of shape (batch_size, seq_len).
+            input_ids (Optional[Int[torch.Tensor, "B L_enc"]]): Input token sequences of shape (batch_size, seq_len).
             attention_mask (Optional[Int[torch.Tensor, "B L_enc"]]): Attention masks for inputs of shape
                 (batch_size, seq_len).
             decoder_input_ids (Optional[Int[torch.Tensor, "B L_dec"]]): Decoder input token sequences
@@ -338,6 +346,8 @@ class GenRecModel(
             _GenRecOutput: Model outputs packaged as a `GenRecOutput` object.
         """
         use_cache = use_cache if use_cache is not None else self.config.use_cache
+        if use_cache and self.training:
+            use_cache = False  # disable use_cache during training to ensure consistent behavior
 
         # Encode if needed (training, first stage of generation)
         if encoder_outputs is None:

@@ -80,6 +80,7 @@ class GenRecDataset(RecDataset[GenRecExample]):
         textual_data_path: Optional[Union[pd.DataFrame, str, Path]] = None,
         lm_encoder: Optional[LMEncoder] = None,
         truncation_strategy: str = "tail",
+        pad_token_id: Optional[int] = None,
     ) -> None:
         """Initialises the dataset and materialises user-level metadata.
 
@@ -103,6 +104,8 @@ class GenRecDataset(RecDataset[GenRecExample]):
                 `min_seq_length` to (up to) `max_seq_length`. `"slide"` will use a sliding window of
                 size `max_seq_length` over the entire user history to construct training examples.
                 Defaults to `"tail"`.
+            pad_token_id (Optional[int]): Padding value for SID tokens. This is used for constructing
+                the prefix tree for constrained decoding. If None, defaults to 0.
         """
         assert truncation_strategy in {"tail", "slide"}, f"Unsupported truncation strategy: {truncation_strategy}."
         self.truncation_strategy = truncation_strategy
@@ -124,8 +127,12 @@ class GenRecDataset(RecDataset[GenRecExample]):
         self._train_item_popularity = self._compute_train_item_popularity()
 
         # Construct prefix tree for constrained decoding
+        self.pad_token_id = pad_token_id if pad_token_id is not None else 0
         self._prefix_tree = PrefixTree.from_mapping(
-            {item_id: self._sid_cache[item_id].tolist() for item_id in range(1, self.item_size + 1)}
+            {
+                item_id: [self.pad_token_id] + self._sid_cache[item_id].tolist()
+                for item_id in range(1, self.item_size + 1)
+            }
         )
 
         # Cache item ID lookup from SID sequences

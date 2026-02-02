@@ -152,7 +152,9 @@ class DummyGenRecModel(GenRecModel[GenRecModelConfig, GenRecOutput, BaseModelOut
         for batch_idx in range(batch):
             for beam_idx in range(num_beams):
                 start = batch_idx * num_beams + beam_idx + 1
-                seq = torch.arange(start, start + width, dtype=torch.long, device=device)
+                bos = torch.tensor([0], device=device, dtype=torch.long)
+                seq_body = torch.arange(start, start + width, dtype=torch.long, device=device)
+                seq = torch.cat([bos, seq_body], dim=0)
                 sequences.append(seq)
         stacked = torch.stack(sequences, dim=0)
         return GenerateBeamEncoderDecoderOutput(sequences=stacked)

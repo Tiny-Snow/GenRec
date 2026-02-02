@@ -235,8 +235,10 @@ class GenRecTrainer(Trainer, Generic[_GenRecModel, _GenRecTrainingArguments], AB
         )
 
         # Set <EOS> to <PAD>, set decoder <SOS> token id
+        self.pad_token_id = model.config.pad_token_id
         self.eos_token_id = model.config.pad_token_id
         self.decoder_start_token_id = model.config.decoder_start_token_id
+        self.use_cache = model.config.use_cache
 
         # Prepare GenerationConfig and prefix_allowed_tokens_fn for generation during evaluation
         self.gen_cfg = GenerationConfig(
@@ -244,9 +246,10 @@ class GenRecTrainer(Trainer, Generic[_GenRecModel, _GenRecTrainingArguments], AB
             min_new_tokens=self.sid_width,
             early_stopping=True,
             num_beams=self.num_beams,
-            use_cache=True,
+            use_cache=self.use_cache,
             num_return_sequences=self.num_beams,
             return_dict_in_generate=True,
+            pad_token_id=self.pad_token_id,
             eos_token_id=self.eos_token_id,
             decoder_start_token_id=self.decoder_start_token_id,
         )
@@ -424,6 +427,6 @@ class GenRecTrainer(Trainer, Generic[_GenRecModel, _GenRecTrainingArguments], AB
         # Get predicted sids, scores, and calculate metrics
         batch_size = input_ids.size(0)
         predictions: Int[torch.Tensor, "B num_beams C"]
-        predictions = generation_outputs.sequences.reshape(batch_size, self.num_beams, self.sid_width)
+        predictions = generation_outputs.sequences.reshape(batch_size, self.num_beams, self.sid_width + 1)[:, :, 1:]
 
         return loss, predictions, labels

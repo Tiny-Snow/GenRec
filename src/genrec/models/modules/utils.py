@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Union
 
 from jaxtyping import Float, Int
 import torch
@@ -18,7 +18,7 @@ def create_attention_mask(
     is_causal: bool = True,
     mask_value: Optional[float] = None,
     dtype: torch.dtype = torch.float32,
-    cache_position: Optional[Int[torch.Tensor, "seq_len"]] = None,
+    cache_position: Optional[Union[Int[torch.Tensor, "#B seq_len"], Int[torch.Tensor, "seq_len"]]] = None,
     past_key_values_length: int = 0,
     kv_seq_len: Optional[int] = None,
 ) -> Float[torch.Tensor, "B 1 tgt_len key_len"]:
@@ -30,10 +30,12 @@ def create_attention_mask(
         tgt_len (Optional[int]): Target sequence length. Defaults to `seq_len` when None.
         is_causal (bool): Whether to apply causal masking. Default is True.
         mask_value (Optional[float]): Value to use for masked positions. If None, uses the minimum
-            representable value for the specified `dtype`.
+            representable value for the specified `dtype`. Default is None.
         dtype (torch.dtype): Data type of the output mask. Default is `torch.float32`.
         cache_position (Optional[Int[torch.Tensor, "seq_len"]]): Absolute positions of the target tokens when
             using KV-cache during decoding. If None, positions are inferred from `past_key_values_length`.
+            Note that a 1D cache_position with shape (1, seq_len), or a 2D cache_position with shape (#B, seq_len)
+            are both acceptable. Default is None.
         past_key_values_length (int): Number of cached tokens already seen by the decoder. Default is 0.
         kv_seq_len (Optional[int]): Optional static key length (e.g., when using a compileable cache). If provided,
             the attention mask will be expanded or trimmed to this length.

@@ -72,6 +72,7 @@ class TIGERModelConfig(GenRecModelConfig):
         self.head_dim = self.hidden_size // num_heads
         self.num_encoder_layers = num_encoder_layers
         self.num_decoder_layers = num_decoder_layers
+        self.num_hidden_layers = num_decoder_layers  # for KV-cache
         self.linear_dropout = linear_dropout
         self.attention_dropout = attention_dropout
         self.attention_bias = attention_bias
@@ -366,7 +367,9 @@ class TIGERModel(GenRecModel[TIGERModelConfig, TIGERModelOutput, BaseModelOutput
     - Recommender Systems with Generative Retrieval. NeurIPS '23.
     """
 
-    _tied_weights_keys = ["encoder.embed_tokens.weight", "decoder.embed_tokens.weight", "lm_head.weight"]
+    _tied_weights_keys = ["_encoder.embed_tokens.weight", "_decoder.embed_tokens.weight", "lm_head.weight"]
+    _keys_to_ignore_on_save = ["_encoder.embed_tokens.weight", "_decoder.embed_tokens.weight"]
+    _keys_to_ignore_on_load_missing = ["_encoder.embed_tokens.weight", "_decoder.embed_tokens.weight", "lm_head.weight"]
 
     config_class = TIGERModelConfig
     output_class = TIGERModelOutput
@@ -400,6 +403,7 @@ class TIGERModel(GenRecModel[TIGERModelConfig, TIGERModelOutput, BaseModelOutput
         if self.config.tie_word_embeddings:
             self._tie_or_clone_weights(self.encoder.embed_tokens, self.shared)
             self._tie_or_clone_weights(self.decoder.embed_tokens, self.shared)
+            self._tie_or_clone_weights(self.lm_head, self.shared)
 
     @property
     def encoder(self) -> TIGERStack:
@@ -413,8 +417,8 @@ class TIGERModel(GenRecModel[TIGERModelConfig, TIGERModelOutput, BaseModelOutput
 
     def forward(
         self,
-        input_ids: Int[torch.Tensor, "B L_enc"],
-        attention_mask: Int[torch.Tensor, "B L_enc"],
+        input_ids: Optional[Int[torch.Tensor, "B L_enc"]] = None,
+        attention_mask: Optional[Int[torch.Tensor, "B L_enc"]] = None,
         decoder_input_ids: Optional[Int[torch.Tensor, "B L_dec"]] = None,
         decoder_attention_mask: Optional[Int[torch.Tensor, "B L_dec"]] = None,
         encoder_outputs: Optional[BaseModelOutputWithPastAndCrossAttentions] = None,
@@ -433,7 +437,7 @@ class TIGERModel(GenRecModel[TIGERModelConfig, TIGERModelOutput, BaseModelOutput
         base `GenRecModel`.
 
         Args:
-            input_ids (Int[torch.Tensor, "B L_enc"]): Input token sequences of shape (batch_size, seq_len).
+            input_ids (Optional[Int[torch.Tensor, "B L_enc"]]): Input token sequences of shape (batch_size, seq_len).
             attention_mask (Optional[Int[torch.Tensor, "B L_enc"]]): Attention masks for inputs of shape
                 (batch_size, seq_len).
             decoder_input_ids (Optional[Int[torch.Tensor, "B L_dec"]]): Decoder input token sequences

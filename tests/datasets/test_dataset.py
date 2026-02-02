@@ -363,15 +363,20 @@ def test_genrec_dataset_prefix_allowed_tokens_fn(genrec_dataset, sid_cache):
     assert prefix_fn is not None
 
     allowed_from_root = prefix_fn(0, torch.tensor([], dtype=torch.int64))
-    expected_root_tokens = sorted(int(token) for token in sid_cache[1 : genrec_dataset.item_size + 1, 0])
-    assert sorted(allowed_from_root) == expected_root_tokens
+    assert allowed_from_root == [genrec_dataset.pad_token_id]
+
+    allowed_after_pad = prefix_fn(0, torch.tensor([genrec_dataset.pad_token_id], dtype=torch.int64))
+    expected_after_pad = sorted(int(token) for token in sid_cache[1 : genrec_dataset.item_size + 1, 0])
+    assert sorted(allowed_after_pad) == expected_after_pad
 
     test_item_id = 3
     sid_tokens = sid_cache[test_item_id]
-    allowed_next = prefix_fn(0, torch.tensor([int(sid_tokens[0])], dtype=torch.int64))
+    allowed_next = prefix_fn(0, torch.tensor([genrec_dataset.pad_token_id, int(sid_tokens[0])], dtype=torch.int64))
     assert allowed_next == [int(sid_tokens[1])]
 
-    allowed_after_full_item = prefix_fn(0, torch.tensor(sid_tokens.tolist(), dtype=torch.int64))
+    allowed_after_full_item = prefix_fn(
+        0, torch.tensor([genrec_dataset.pad_token_id] + sid_tokens.tolist(), dtype=torch.int64)
+    )
     assert allowed_after_full_item == []
 
     invalid_allowed = prefix_fn(0, torch.tensor([9999], dtype=torch.int64))
