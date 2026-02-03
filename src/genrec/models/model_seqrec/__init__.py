@@ -59,3 +59,11 @@ __all__ += [
     "SASRecTPABModelConfig",
     "SASRecTPABModelOutput",
 ]
+
+from .sasrec_mojito import SASRecMOJITOModel, SASRecMOJITOModelConfig, SASRecMOJITOModelOutput
+
+__all__ += [
+    "SASRecMOJITOModel",
+    "SASRecMOJITOModelConfig",
+    "SASRecMOJITOModelOutput",
+]

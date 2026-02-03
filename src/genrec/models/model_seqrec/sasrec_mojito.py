@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from ..modules import LlamaDecoderLayer, RMSNorm, RotaryEmbedding, create_attention_mask
 from .base import (
     SeqRecModel,
-    SeqRecModelConfig,
     SeqRecModelConfigFactory,
     SeqRecModelFactory,
-    SeqRecOutput,
     SeqRecOutputFactory,
 )
+from .sasrec import SASRecModelConfig, SASRecModelOutput
+
 
 __all__ = [
     "SASRecMOJITOModel",
@@ -27,41 +28,29 @@ __all__ = [
 
 
 @SeqRecModelConfigFactory.register("sasrec_mojito")
-class SASRecMOJITOModelConfig(SeqRecModelConfig):
+class SASRecMOJITOModelConfig(SASRecModelConfig):
     """Configuration class for SASRecMOJITO model, which extends the base `SeqRecModelConfig`."""
 
     def __init__(
         self,
-        attention_dropout: float = 0.0,
-        attention_bias: bool = False,
-        ffn_bias: bool = False,
+        lambda_trans_seq: float = 0.1,
+        num_fism_items: int = 20,
         **kwargs,
     ) -> None:
-        """Initializes the configuration with model hyperparameters.
-
-        Args:
-            attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
-            attention_bias (bool): Whether to include bias terms in the attention projections.
-                Default is False.
-            ffn_bias (bool): Whether to include bias terms in the feed-forward network projections.
-                Default is False.
-            **kwargs (Any): Additional keyword arguments for the base `SeqRecModelConfig`.
-        """
         super().__init__(**kwargs)
-        self.attention_dropout = attention_dropout
-        self.attention_bias = attention_bias
-        self.ffn_bias = ffn_bias
+        self.lambda_trans_seq = lambda_trans_seq
+        self.num_fism_items = num_fism_items
 
 
 @SeqRecOutputFactory.register("sasrec_mojito")
 @dataclass
-class SASRecMOJITOModelOutput(SeqRecOutput):
+class SASRecMOJITOModelOutput(SASRecModelOutput):
     """Output class for SASRecMOJITO model.
 
     The `SASRecMOJITOModelOutput` extends the base `SeqRecOutput` without adding any additional attributes.
     """
 
-    pass
+    adaptive_last_hidden_state: Optional[Float[torch.Tensor, "B L d"]] = None
 
 
 @SeqRecModelFactory.register("sasrec_mojito")
@@ -109,6 +98,14 @@ class SASRecMOJITOModel(SeqRecModel[SASRecMOJITOModelConfig, SASRecMOJITOModelOu
         self.gradient_checkpointing = False  # disable gradient checkpointing by default
         self.post_init()  # use PretrainedModel's default weight initialization
 
+        self.time_emb = MOJITOTimeEmbedding(time_emb_dim=config.hidden_size)
+        self.time_proj = nn.Linear(config.hidden_size, config.hidden_size)
+        self.temporal_mix = GaussianMixtureTemporalEmbedding(embedding_dim=config.hidden_size)
+        self.adaptive_attention = AdaptiveAttention(
+            embedding_dim=config.hidden_size, lambda_trans_seq=config.lambda_trans_seq
+        )
+        self.num_fism_items = config.num_fism_items  # number of FISM elements to sample for each user
+
     def forward(
         self,
         input_ids: Int[torch.Tensor, "B L"],
@@ -132,14 +129,34 @@ class SASRecMOJITOModel(SeqRecModel[SASRecMOJITOModelConfig, SASRecMOJITOModelOu
             SASRecMOJITOModelOutput: Model outputs packaged as a `SASRecMOJITOModelOutput` descendant.
         """
 
+        timestamps: Optional[Int[torch.Tensor, "B L"]] = kwargs.pop("timestamps", None)
+        if timestamps is None:  # pragma: no cover - defensive check
+            raise ValueError("MOJITOModel.forward requires `timestamps` to be provided via kwargs.")
+        # Process timestamps to obtain temporal
+        time_embeddings: Float[torch.Tensor, "B L d"] = self.time_emb(timestamps)
+
         hidden_states: Float[torch.Tensor, "B L d"]
-        hidden_states = self.embed_tokens(input_ids)
+        # hidden_states = self.embed_tokens(input_ids) + self.time_proj(time_embeddings)
+        hidden_states = self.temporal_mix(
+            item_emb=self.embed_tokens(input_ids),
+            time_emb=self.time_proj(time_embeddings),
+        )
 
         causal_mask: Float[torch.Tensor, "B 1 L L"]
         causal_mask = create_attention_mask(attention_mask, is_causal=True)
 
         position_embeddings: Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]
         position_embeddings = self.rotary_emb(hidden_states)
+
+        # get global_emb
+        user_fism_items: Int[torch.Tensor, "B N"] = sample_user_fism_items(
+            input_ids, self.num_fism_items, pad_token_id=0
+        )
+        adaptive_last_hidden_state: Optional[Float[torch.Tensor, "B L d"]] = None
+        adaptive_last_hidden_state = self.adaptive_attention(
+            seq=hidden_states,
+            user_fism_items=self.embed_tokens(user_fism_items),
+        )
 
         model_loss = None  # By default, SASRec does not compute model loss internally.
         all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
@@ -168,4 +185,166 @@ class SASRecMOJITOModel(SeqRecModel[SASRecMOJITOModelConfig, SASRecMOJITOModelOu
             model_loss=model_loss if output_model_loss else None,
             hidden_states=tuple(all_hidden_states) if output_hidden_states else None,
             attentions=tuple(all_attentions) if output_attentions else None,
+            adaptive_last_hidden_state=adaptive_last_hidden_state,
         )
+
+
+class MOJITOTimeEmbedding(nn.Module):
+    def __init__(self, time_emb_dim: int):
+        super().__init__()
+        self.time_embedding = nn.Linear(1, time_emb_dim)
+        nn.init.uniform_(self.time_embedding.weight, a=-0.01, b=0.01)
+
+    def forward(self, timestamps: torch.Tensor) -> torch.Tensor:
+        timestamps = torch.log1p(timestamps)  # Apply log-scaling
+        return self.time_embedding(timestamps.unsqueeze(-1))  # Output shape: [batch_size, seq_length, time_emb_dim]
+
+
+class GaussianMixtureTemporalEmbedding(nn.Module):
+    """Gaussian Mixture-based Temporal Embedding"""
+
+    def __init__(self, embedding_dim: int):
+        super().__init__()
+        self.embedding_dim = embedding_dim
+
+        # Learnable Gaussian mixture weights (initialize equally distributed)
+        self.gaussian_weights = nn.Parameter(torch.ones(1, 2))  # Two components: one for item, one for time
+        self.temporal_noise = nn.Parameter(torch.ones(1))  # Noise component for modeling uncertainty
+
+    def forward(self, item_emb: torch.Tensor, time_emb: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            item_emb: [B, L, d] item embeddings from self.embed_tokens
+            time_emb: [B, L, d] time embeddings from self.time_emb
+
+        Returns:
+            Combined embedding with Gaussian mixture weighting: [B, L, d]
+        """
+        # Normalize Gaussian weights
+        weights = F.softmax(self.gaussian_weights, dim=-1)  # Shape: [1, 2], normalized weights
+
+        # Add temporal noise for uncertainty modeling
+        noisy_time_emb = time_emb + torch.randn_like(time_emb) * (self.temporal_noise**2)
+
+        # Combine item and temporal embeddings using Gaussian weights
+        final_embedding = weights[:, 0] * item_emb + weights[:, 1] * noisy_time_emb
+        return final_embedding
+
+
+class FISMAttention(nn.Module):
+    """
+    Factorized Item Similarity Model (FISM) Adaptive Attention Vector
+    This module computes attention over item sequences based on a user-defined FISM mechanism.
+    """
+
+    def __init__(self, beta=1.0):
+        """
+        Args:
+            beta (float, optional): A hyperparameter to scale the softmax weight normalization. Default is 1.0.
+        """
+        super().__init__()
+        self.beta = beta
+
+    def forward(self, seq: torch.Tensor, fism_items: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            seq: The embedding of the input sequence [B, T, D], where:
+                 B = batch size, T = sequence length, D = embedding dimension.
+            fism_items: Factorized item embeddings [B, M, D], where:
+                 M = number of FISM-related items to calculate attention with.
+
+        Returns:
+            att_vecs: Attention-weighted item vectors for the sequence [B, T, D].
+        """
+        # Calculate dot-product similarity
+        w_ij = torch.matmul(seq, fism_items.transpose(-1, -2))  # Shape: [B, T, M]
+
+        # Compute exponential weights
+        exp_wij = torch.exp(w_ij)  # Shape: [B, T, M]
+        exp_sum = torch.sum(exp_wij, dim=-1, keepdim=True)  # [B, T, 1]
+
+        # Apply beta scaling (if beta != 1.0, scale the weights)
+        if self.beta != 1.0:
+            exp_sum = exp_sum**self.beta  # Perform element-wise power
+
+        # Normalize to get attention weights
+        att_weights = exp_wij / exp_sum  # Shape: [B, T, M]
+
+        # Compute attention-weighted vectors
+        att_vecs = torch.matmul(att_weights, fism_items)  # Shape: [B, T, D]
+        return att_vecs
+
+
+class AdaptiveAttention(nn.Module):
+    """
+    Adaptive Attentive Sequence Layer.
+
+    This layer combines FISM's attention-weighted vectors with the input sequence
+    based on the lambda_trans_seq parameter.
+    """
+
+    def __init__(self, embedding_dim: int, lambda_trans_seq: float = 0.1):
+        """
+        Args:
+            embedding_dim: Int, the embedding dimension for input sequences
+            lambda_trans_seq: float, weight to control blending ratio of sequence-to-context attention
+        """
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.lambda_trans_seq = lambda_trans_seq  # Weight for blending
+
+        self.fism_attention = FISMAttention()  # FISM attention module
+
+    def forward(
+        self,
+        seq: torch.Tensor,  # [B, T, D] Input sequence embeddings
+        user_fism_items: torch.Tensor,  # [B, M, D] User-related FISM embedding vectors
+    ) -> torch.Tensor:
+        """
+        Forward propagation for adaptive attention sequence.
+
+        Args:
+            seq: Input sequence embedding [B, T, D].
+            user_fism_items: User embeddings for items (FISM-related) [B, M, D].
+
+        Returns:
+            att_fism_seq: FISM attention-modulated item embeddings [B, T, D].
+        """
+        # Normalize input
+        seq_normalized = F.normalize(seq, p=2, dim=-1)  # Normalize along embedding dimension
+
+        # Compute FISM attention vectors
+        att_vectors = self.fism_attention(seq_normalized, user_fism_items)  # [B, T, D]
+
+        # Weighted combination of sequence and attention vectors
+        if self.lambda_trans_seq < 1.0:
+            att_fism_seq = seq * (1.0 - self.lambda_trans_seq) + (seq * att_vectors) * self.lambda_trans_seq
+        else:
+            att_fism_seq = seq * att_vectors  # No control; 100% attention blending
+
+        return att_fism_seq
+
+
+import numpy as np
+
+
+def sample_user_fism_items(input_ids: torch.Tensor, n_fism_elems: int, pad_token_id: int = 0):
+    B, L = input_ids.size()
+    device = input_ids.device
+    user_fism_items = []
+
+    for i in range(B):
+        row = input_ids[i]
+        valid = row[row != pad_token_id]
+        hist = valid.cpu().numpy()
+        hist_len = len(hist)
+        if hist_len == 0:
+            selected = np.full(n_fism_elems, pad_token_id, dtype=np.int64)
+        elif hist_len >= n_fism_elems:
+            selected = np.random.choice(hist, n_fism_elems, replace=False)
+        else:
+            mul = n_fism_elems // hist_len
+            res = n_fism_elems % hist_len
+            selected = np.concatenate([np.tile(hist, mul), np.random.choice(hist, res, replace=False)])
+        user_fism_items.append(torch.from_numpy(selected))
+    return torch.stack(user_fism_items, dim=0).to(device)

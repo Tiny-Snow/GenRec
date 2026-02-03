@@ -60,6 +60,13 @@ __all__ += [
     "BCETPABSeqRecTrainingArguments",
 ]
 
+from .bce_mojito import BCEMOJITOSeqRecTrainer, BCEMOJITOSeqRecTrainingArguments
+
+__all__ += [
+    "BCEMOJITOSeqRecTrainer",
+    "BCEMOJITOSeqRecTrainingArguments",
+]
+
 from .sl import SLSeqRecTrainer, SLSeqRecTrainingArguments
 
 __all__ += [

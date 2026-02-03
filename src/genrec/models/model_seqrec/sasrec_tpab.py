@@ -28,6 +28,7 @@ class SASRecTPABModelConfig(SASRecModelConfig):
     def __init__(
         self,
         num_buckets: int = 20,
+        temporal_decay: float = 0.2,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
@@ -38,6 +39,7 @@ class SASRecTPABModelConfig(SASRecModelConfig):
         """
         super().__init__(**kwargs)
         self.num_buckets = num_buckets
+        self.temporal_decay = temporal_decay
 
 
 @SeqRecOutputFactory.register("sasrec_tpab")
@@ -103,16 +105,10 @@ class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput])
         self.pop_proj = nn.Linear(config.hidden_size, config.hidden_size)
 
         # -- caches for coarsening --
-        # estimated temporal popularity per item (float)
-        self.register_buffer(
-            "item_temporal_popularity",
-            torch.zeros(config.item_size, dtype=torch.float32),
-            persistent=False,
-        )
         # current bucket assignment for each item
         self.register_buffer(
-            "soft_bucket_probs",
-            torch.zeros(self.item_size, config.num_buckets, dtype=torch.float32),
+            "item_bucket_indices",
+            torch.zeros(self.item_size + 1, dtype=torch.long),
             persistent=False,
         )
 
@@ -186,14 +182,8 @@ class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput])
         item_emb = self.embed_tokens(item_ids)
         I = self.item_size
 
-        # local copy of current soft probs and pop embeddings
-        soft_probs = self.soft_bucket_probs.clamp_min(0.0)
         pop_emb_table = self.embedding_item_pop.weight  # (K, D)
-        # compute soft weighted average pop embedding for each item: E=softmax(delta)*Emb
-        fused_pop = soft_probs @ pop_emb_table  # (I, D)
-
-        if fused_pop.shape[0] != I:
-            fused_pop = F.pad(fused_pop, (0, 0, 0, I - fused_pop.shape[0]))
+        fused_pop = pop_emb_table[self.item_bucket_indices]  # (I, D)
 
         # Pick out fused_pop[item_ids]
         pop_emb = fused_pop[item_ids]
@@ -206,9 +196,9 @@ class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput])
         input_ids: Int[torch.Tensor, "B L"],
         timestamps: Int[torch.Tensor, "B L"],
     ):
-        device = self.item_temporal_popularity.device
+        device = self.embedding_item_pop.weight.device
         B, L = input_ids.shape
-        period = getattr(self.config, "period", 4)
+        period = getattr(self.config, "period", 8)
 
         ts_min, ts_max = timestamps.min().item(), timestamps.max().item()
         ts_range = ts_max - ts_min + 1
@@ -217,7 +207,7 @@ class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput])
         if not hasattr(self, "pop_stage_matrix"):
             self.register_buffer(
                 "pop_stage_matrix",
-                torch.zeros(period, self.item_size, dtype=torch.float32),
+                torch.zeros(period, self.item_size + 1, dtype=torch.float32, device=device),
                 persistent=False,
             )
 
@@ -228,7 +218,7 @@ class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput])
             mask = flat_stage == p
             if mask.any():
                 items_in_stage = flat_items[mask]
-                counts = torch.bincount(items_in_stage, minlength=self.item_size).float().to(device)
+                counts = torch.bincount(items_in_stage, minlength=self.item_size + 1).float().to(device)
                 self.pop_stage_matrix[p] = (
                     self.config.temporal_decay * self.pop_stage_matrix[p] + (1 - self.config.temporal_decay) * counts
                 )
@@ -237,13 +227,6 @@ class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput])
         pop_vec = self.pop_stage_matrix[current_stage[0]]
         pmax = torch.max(pop_vec).clamp_min(1e-6)
 
-        if hasattr(self, "bucket_centers"):
-            pop_norm = pop_vec / pmax
-            delta = pop_norm.unsqueeze(1) - self.bucket_centers.unsqueeze(0)  # (I,K)
-            dist = -delta.pow(2)
-            soft_probs = F.softmax(dist / self.config.bucket_temp, dim=-1)  # (I,K)
-            self.soft_bucket_probs.copy_(soft_probs)
-        else:
-            edges = pmax ** (torch.arange(1, self.config.num_buckets + 1, device=device) / self.config.num_buckets)
-            bucket_idx = torch.bucketize(pop_vec, edges).clamp(max=self.config.num_buckets - 1)
-            self.item_bucket_indices.copy_(bucket_idx)
+        edges = pmax ** (torch.arange(1, self.config.num_buckets + 1, device=device) / self.config.num_buckets)
+        bucket_idx = torch.bucketize(pop_vec, edges).clamp(max=self.config.num_buckets - 1)
+        self.item_bucket_indices.copy_(bucket_idx)
