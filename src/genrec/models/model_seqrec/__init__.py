@@ -67,3 +67,19 @@ __all__ += [
     "SASRecMOJITOModelConfig",
     "SASRecMOJITOModelOutput",
 ]
+
+from .hstu_mojito import HSTUMOJITOModel, HSTUMOJITOModelConfig, HSTUMOJITOModelOutput
+
+__all__ += [
+    "HSTUMOJITOModel",
+    "HSTUMOJITOModelConfig",
+    "HSTUMOJITOModelOutput",
+]
+
+from .hstu_tpab import HSTUTPABModel, HSTUTPABModelConfig, HSTUTPABModelOutput
+
+__all__ += [
+    "HSTUTPABModel",
+    "HSTUTPABModelConfig",
+    "HSTUTPABModelOutput",
+]

@@ -1,4 +1,4 @@
-"""SeqRec Model: SASRec."""
+"""SeqRec Model: HSTU."""
 
 from __future__ import annotations
 
@@ -8,23 +8,31 @@ from typing import List, Optional, Tuple
 from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from ..modules import RMSNorm, RotaryEmbedding, create_attention_mask, LlamaDecoderLayer
-from .base import SeqRecModel, SeqRecModelConfigFactory, SeqRecModelFactory, SeqRecOutputFactory
-from .sasrec import SASRecModelConfig, SASRecModelOutput
+from ..modules import (
+    LearnableInputPositionalEmbedding,
+    RMSNorm,
+    RotaryEmbedding,
+    SequentialTransductionUnit,
+    create_attention_mask,
+)
+from .base import (
+    SeqRecModel,
+    SeqRecModelConfigFactory,
+    SeqRecModelFactory,
+    SeqRecOutputFactory,
+)
+
+from .hstu import HSTUModelConfig, HSTUModelOutput
 
 __all__ = [
-    "SASRecTPABModel",
-    "SASRecTPABModelConfig",
-    "SASRecTPABModelOutput",
+    "HSTUTPABModel",
+    "HSTUTPABModelConfig",
 ]
 
 
-@SeqRecModelConfigFactory.register("sasrec_tpab")
-class SASRecTPABModelConfig(SASRecModelConfig):
-    """Configuration class for SASRec model, which extends the base `SASRecModelConfig`."""
-
+@SeqRecModelConfigFactory.register("hstu_tpab")
+class HSTUTPABModelConfig(HSTUModelConfig):
     def __init__(
         self,
         num_buckets: int = 20,
@@ -44,58 +52,91 @@ class SASRecTPABModelConfig(SASRecModelConfig):
         self.period = period  # number of time stages for temporal popularity tracking
 
 
-@SeqRecOutputFactory.register("sasrec_tpab")
+@SeqRecOutputFactory.register("hstu_tpab")
 @dataclass
-class SASRecTPABModelOutput(SASRecModelOutput):
-    """Output class for SASRecTPAB model.
-
-    The `SASRecTPABModelOutput` extends the base `SASRecModelOutput` without adding any additional attributes.
-    """
+class HSTUTPABModelOutput(HSTUModelOutput):
+    """HSTU model output class for TPAB."""
 
     pass
 
 
-@SeqRecModelFactory.register("sasrec_tpab")
-class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput]):
-    """SASRec model implementation.
+@SeqRecModelFactory.register("hstu_tpab")
+class HSTUTPABModel(SeqRecModel[HSTUTPABModelConfig, HSTUTPABModelOutput]):
+    """HSTU model implementation.
 
-    Here we implement a more advanced version of the SASRec model using: (1) RoPE
-    for positional embeddings, (2) Pre-norm architecture with RMSNorm, (3) SwiGLU
-    for feed-forward networks, and (4) 4x intermediate size in feed-forward networks.
-    The overall architecture follows the original SASRec design and utilizes the
-    implementations in Llama model.
+    Here we implement HSTU (Hierarchical Sequential Transformer Unit) based on the Meta's
+    official code (https://github.com/meta-recsys/generative-recommenders). We generalize
+    the original implementation to allow more flexibility in model configuration and boost
+    model performance. The main differences are summarized as follows:
+
+    - The input positional embeddings are implemented using `LearnableInputPositionalEmbedding`,
+        which directly adds learnable positional embeddings to the input embeddings without
+        scaling with sqrt(hidden_size). We also provide an option `enable_input_pos_emb` to disable
+        input positional embeddings.
+    - All the layer normalizations are implemented using `RMSNorm`. We also provide an option
+        `enable_final_layernorm` to apply a final layer normalization after the last HSTU layer.
+    - Changes the industrial implementation of relative position and time attention bias
+        to a more readable `RelativeBucketedTimeAndPositionAttentionBias`.
+    - Provide an option `enable_learnable_rel_posemb` to switch the original learnable relative
+        positional embeddings with Rotary Positional Embeddings (RoPE) for better extrapolation
+        to longer sequences and improved performance.
+    - Provide an option `enable_attention_gating` to disable the original attention gating mechanism,
+        allowing for a standard attention computation, which can be beneficial in certain scenarios
+        where gating may not be stable.
+    - Provide an option `enable_ffn` to restore the FFN after attention, which was removed in the
+        original STU design, to enhance the model's capacity.
 
     References:
-        - Self-Attentive Sequential Recommendation. ICDM '18.
+        - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
+            Generative Recommendations. ICML '24.
     """
 
-    config_class = SASRecTPABModelConfig
+    config_class = HSTUTPABModelConfig
 
-    def __init__(self, config: SASRecTPABModelConfig) -> None:
-        """Initializes SASRec model with the given configuration."""
+    def __init__(self, config: HSTUTPABModelConfig) -> None:
+        """Initializes HSTU model with the given configuration."""
         super().__init__(config)
-        self.config: SASRecTPABModelConfig = config
+        self.config: HSTUTPABModelConfig
 
         assert (
             config.hidden_size % config.num_attention_heads == 0
         ), "hidden_size must be divisible by num_attention_heads."
         self.head_dim = config.hidden_size // config.num_attention_heads
 
+        # NOTE: in HSTU, the dropout_rate of input embeddings and GLU are both set to linear_dropout.
+        self.input_pos_emb: Optional[LearnableInputPositionalEmbedding] = None
+        if config.enable_input_pos_emb:
+            self.input_pos_emb = LearnableInputPositionalEmbedding(
+                max_position_embeddings=config.max_seq_len,
+                embed_dim=config.hidden_size,
+                dropout_rate=config.linear_dropout,
+            )
+
+        self.rotary_emb: Optional[RotaryEmbedding] = None
+        if not config.enable_learnable_rel_posemb:
+            self.rotary_emb = RotaryEmbedding(head_dim=self.head_dim)
+
         self.layers = nn.ModuleList(
             [
-                LlamaDecoderLayer(
+                SequentialTransductionUnit(
                     hidden_size=config.hidden_size,
                     num_heads=config.num_attention_heads,
                     intermediate_size=config.hidden_size * 4,
                     attention_dropout=config.attention_dropout,
-                    attention_bias=config.attention_bias,
-                    ffn_bias=config.ffn_bias,
+                    linear_dropout=config.linear_dropout,
+                    max_seq_len=config.max_seq_len,
+                    num_buckets=config.num_buckets,
+                    enable_learnable_rel_posemb=config.enable_learnable_rel_posemb,
+                    enable_attention_gating=config.enable_attention_gating,
+                    enable_ffn=config.enable_ffn,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
         )
-        self.rotary_emb = RotaryEmbedding(head_dim=self.head_dim)
-        self.final_layer_norm = RMSNorm(config.hidden_size)
+
+        self.final_layernorm: Optional[RMSNorm] = None
+        if config.enable_final_layernorm:
+            self.final_layernorm = RMSNorm(config.hidden_size)
 
         self.gradient_checkpointing = False  # disable gradient checkpointing by default
         self.post_init()  # use PretrainedModel's default weight initialization
@@ -119,8 +160,8 @@ class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput])
         output_hidden_states: bool = False,
         output_attentions: bool = False,
         **kwargs,
-    ) -> SASRecTPABModelOutput:
-        """Forward pass for SASRecTPAB model.
+    ) -> HSTUTPABModelOutput:
+        """Forward pass for HSTU model.
 
         Args:
             input_ids (Int[torch.Tensor, "B L"]): Input item ID sequences of shape (batch_size, seq_len).
@@ -130,12 +171,17 @@ class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput])
             output_attentions (bool): Whether to return attention weights from all layers. Default is False.
             **kwargs (Any): Additional keyword arguments for the model.
 
+        Keywords Args:
+            timestamps (Int[torch.Tensor, "B L"]): Timestamps corresponding to each item in the input sequences.
+                The timestamps are assumed to be Unix format (in seconds).
+
         Returns:
-            SASRecTPABModelOutput: Model outputs packaged as a `SASRecTPABModelOutput` descendant.
+            HSTUModelOutput: Model outputs packaged as a `HSTUModelOutput` descendant.
         """
+
         timestamps: Optional[Int[torch.Tensor, "B L"]] = kwargs.pop("timestamps", None)
         if timestamps is None:  # pragma: no cover - defensive check
-            raise ValueError("TPABModel.forward requires `timestamps` to be provided via kwargs.")
+            raise ValueError("HSTUModel.forward requires `timestamps` to be provided via kwargs.")
         self._update_temporal_popularity(input_ids, timestamps)
 
         hidden_states: Float[torch.Tensor, "B L d"]
@@ -144,10 +190,16 @@ class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput])
         causal_mask: Float[torch.Tensor, "B 1 L L"]
         causal_mask = create_attention_mask(attention_mask, is_causal=True)
 
-        position_embeddings: Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]
-        position_embeddings = self.rotary_emb(hidden_states)
+        position_embeddings: Optional[
+            Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]
+        ] = None
+        if not self.config.enable_learnable_rel_posemb and self.rotary_emb is not None:
+            position_embeddings = self.rotary_emb(hidden_states)
 
-        model_loss = None  # By default, SASRec does not compute model loss internally.
+        if self.config.enable_input_pos_emb and self.input_pos_emb is not None:
+            hidden_states = self.input_pos_emb(hidden_states)
+
+        model_loss = None  # By default, HSTU does not compute model loss internally.
         all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
         all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
 
@@ -159,17 +211,22 @@ class SASRecTPABModel(SeqRecModel[SASRecTPABModelConfig, SASRecTPABModelOutput])
                 hidden_states,
                 attention_mask=causal_mask,
                 position_embeddings=position_embeddings,
+                timestamps=timestamps,
             )
 
             if output_attentions:
                 all_attentions.append(attn_weights)
 
-        hidden_states = self.final_layer_norm(hidden_states)
+        # NOTE: in the official HSTU code, there is no final layer norm,
+        # as it apply L2 normalization after getting the final item representations.
+        # Here we still keep an optional final layer norm for other loss functions' sake.
+        if self.config.enable_final_layernorm and self.final_layernorm is not None:
+            hidden_states = self.final_layernorm(hidden_states)
 
         if output_hidden_states:
             all_hidden_states.append(hidden_states)
 
-        return SASRecTPABModelOutput(
+        return HSTUModelOutput(
             last_hidden_state=hidden_states,
             model_loss=model_loss if output_model_loss else None,
             hidden_states=tuple(all_hidden_states) if output_hidden_states else None,
