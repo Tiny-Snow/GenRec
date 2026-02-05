@@ -40,6 +40,7 @@ class SASRecMOJITOModelConfig(SASRecModelConfig):
         super().__init__(**kwargs)
         self.lambda_trans_seq = lambda_trans_seq
         self.num_fism_items = num_fism_items
+        self.num_buckets = 20  # Number of coarse popularity buckets for MOJITO
 
 
 @SeqRecOutputFactory.register("sasrec_mojito")
@@ -98,7 +99,7 @@ class SASRecMOJITOModel(SeqRecModel[SASRecMOJITOModelConfig, SASRecMOJITOModelOu
         self.gradient_checkpointing = False  # disable gradient checkpointing by default
         self.post_init()  # use PretrainedModel's default weight initialization
 
-        self.time_emb = MOJITOTimeEmbedding(time_emb_dim=config.hidden_size)
+        self.time_emb = MOJITOTimeEmbedding(num_buckets=config.num_buckets, time_emb_dim=config.hidden_size)
         self.time_proj = nn.Linear(config.hidden_size, config.hidden_size)
         self.temporal_mix = GaussianMixtureTemporalEmbedding(embedding_dim=config.hidden_size)
         self.adaptive_attention = AdaptiveAttention(
@@ -190,26 +191,33 @@ class SASRecMOJITOModel(SeqRecModel[SASRecMOJITOModelConfig, SASRecMOJITOModelOu
 
 
 class MOJITOTimeEmbedding(nn.Module):
-    def __init__(self, time_emb_dim: int):
+    def __init__(self, num_buckets: int, time_emb_dim: int):
         super().__init__()
-        self.time_embedding = nn.Linear(1, time_emb_dim)
-        nn.init.uniform_(self.time_embedding.weight, a=-0.01, b=0.01)
+        self.num_buckets = num_buckets
+        self.time_embedding = nn.Embedding(num_buckets + 1, time_emb_dim)
+
+    @staticmethod
+    def bucketize_timestamps(timestamps, num_buckets):
+        x = timestamps.abs().clamp(min=1).float()
+        buckets = (torch.log(x) / 0.301).long()
+        buckets = torch.clamp(buckets, min=0, max=num_buckets)
+        return buckets
 
     def forward(self, timestamps: torch.Tensor) -> torch.Tensor:
-        timestamps = torch.log1p(timestamps)  # Apply log-scaling
-        return self.time_embedding(timestamps.unsqueeze(-1))  # Output shape: [batch_size, seq_length, time_emb_dim]
+        buckets = self.bucketize_timestamps(timestamps, self.num_buckets)
+        return self.time_embedding(buckets)
 
 
 class GaussianMixtureTemporalEmbedding(nn.Module):
     """Gaussian Mixture-based Temporal Embedding"""
 
-    def __init__(self, embedding_dim: int):
+    def __init__(self, embedding_dim: int, init_noise_std: float = 0.02):
         super().__init__()
         self.embedding_dim = embedding_dim
+        self.register_buffer("time_emb_scale", torch.tensor(embedding_dim**0.5))
 
         # Learnable Gaussian mixture weights (initialize equally distributed)
-        self.gaussian_weights = nn.Parameter(torch.ones(1, 2))  # Two components: one for item, one for time
-        self.temporal_noise = nn.Parameter(torch.ones(1))  # Noise component for modeling uncertainty
+        # self.temporal_noise = nn.Parameter(torch.ones(embedding_dim) * init_noise_std)
 
     def forward(self, item_emb: torch.Tensor, time_emb: torch.Tensor) -> torch.Tensor:
         """
@@ -220,14 +228,12 @@ class GaussianMixtureTemporalEmbedding(nn.Module):
         Returns:
             Combined embedding with Gaussian mixture weighting: [B, L, d]
         """
-        # Normalize Gaussian weights
-        weights = F.softmax(self.gaussian_weights, dim=-1)  # Shape: [1, 2], normalized weights
-
-        # Add temporal noise for uncertainty modeling
-        noisy_time_emb = time_emb + torch.randn_like(time_emb) * (self.temporal_noise**2)
+        # # Add temporal noise for uncertainty modeling
+        # noise = torch.randn_like(time_emb) * self.temporal_noise.view(1, 1, -1)
+        # noisy_time_emb = time_emb + noise
 
         # Combine item and temporal embeddings using Gaussian weights
-        final_embedding = weights[:, 0] * item_emb + weights[:, 1] * noisy_time_emb
+        final_embedding = item_emb + time_emb / self.time_emb_scale
         return final_embedding
 
 
