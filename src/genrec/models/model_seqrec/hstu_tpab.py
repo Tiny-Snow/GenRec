@@ -243,7 +243,7 @@ class HSTUTPABModel(SeqRecModel[HSTUTPABModelConfig, HSTUTPABModelOutput]):
         # Pick out fused_pop[item_ids]
         pop_emb = fused_pop[item_ids]
         pop_emb = self.pop_proj(pop_emb)
-        return item_emb + pop_emb / self.config.hidden_size**0.5
+        return item_emb + pop_emb / self.config.hidden_size**0.5 / self.config.num_buckets**0.5
 
     @torch.no_grad()
     def _update_temporal_popularity(

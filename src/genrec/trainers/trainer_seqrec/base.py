@@ -217,6 +217,9 @@ def compute_seqrec_metrics(
     topk_indices: Int[torch.Tensor, "B K"]
     if isinstance(prediction.predictions, tuple):  # pragma: no cover - rarely used
         topk_indices = torch.as_tensor(prediction.predictions[0], dtype=torch.long, device=torch_device)
+        sigma_prop = torch.as_tensor(prediction.predictions[1], dtype=torch.float, device=torch_device)
+        pop_attn_score = torch.as_tensor(prediction.predictions[2], dtype=torch.float, device=torch_device)
+        unpop_attn_score = torch.as_tensor(prediction.predictions[3], dtype=torch.float, device=torch_device)
     else:
         topk_indices = torch.as_tensor(prediction.predictions, dtype=torch.long, device=torch_device)
 
@@ -229,6 +232,11 @@ def compute_seqrec_metrics(
     last_step_labels = torch.as_tensor(labels[:, -1], dtype=torch.long, device=torch_device)
 
     results: Dict[str, float] = {}
+
+    results["sigma_prop"] = sigma_prop.mean().item()
+    results["pop_attn_score"] = pop_attn_score.mean().item()
+    results["unpop_attn_score"] = unpop_attn_score.mean().item()
+
     for k in top_k:
         sliced_topk_indices = topk_indices[:, :k]
         for metric_name, metric_params in metrics:
@@ -360,6 +368,7 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         outputs: SeqRecOutput = model(
             **inputs,
             output_model_loss=model.training,  # only compute model loss during training
+            output_attentions=True,
         )
         assert isinstance(outputs, SeqRecOutput), "Model output must be an instance of SeqRecOutput."
 
@@ -381,13 +390,35 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
             logits: Float[torch.Tensor, "B I+1"]
             logits = last_step_hidden_states @ item_embed_weight.T
 
+            sigma_prop = (torch.linalg.svd(logits, full_matrices=False)[1].max() ** 2) / torch.linalg.matrix_norm(
+                logits, ord='fro'
+            ) ** 2
+
             effective_top_k = max(1, min(self.max_top_k, self.item_size))
             _, topk_indices = torch.topk(logits, k=effective_top_k, dim=-1)  # may predict padding index
 
             output_dict: Dict[str, torch.Tensor] = {
                 "loss": loss,
                 "topk_indices": topk_indices.detach(),
+                "sigma_prop": sigma_prop.detach(),
             }
+
+            if outputs.attentions is not None and len(outputs.attentions) > 0:
+                last_layer_attn: Float[torch.Tensor, "B H L L"] = outputs.attentions[-1]
+                attn_summed_h: Float[torch.Tensor, "B L L"] = last_layer_attn.sum(dim=1)
+
+                attn_score: Float[torch.Tensor, "B L"] = attn_summed_h.sum(dim=1)
+
+                input_is_pop = inputs.get("input_is_pop")
+                if input_is_pop is not None:
+                    input_is_pop = input_is_pop.bool()
+
+                    pop_score = attn_score[input_is_pop].sum()
+                    unpop_score = attn_score[~input_is_pop].sum()
+
+                    output_dict["pop_attn_score"] = pop_score.detach()
+                    output_dict["unpop_attn_score"] = unpop_score.detach()
+
             return loss, output_dict
         else:
             return loss
