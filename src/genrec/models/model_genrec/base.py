@@ -72,8 +72,9 @@ class GenRecModelConfig(PretrainedConfig):
         vocab_size: int = 1024,
         hidden_size: int = 256,
         is_encoder_decoder: bool = True,
-        decoder_start_token_id: int = 0,
         pad_token_id: int = 0,
+        eos_token_id: int = 1,
+        decoder_start_token_id: int = 0,
         tie_word_embeddings: bool = True,
         use_cache: bool = True,
         **kwargs,
@@ -84,16 +85,18 @@ class GenRecModelConfig(PretrainedConfig):
             vocab_size (int): Size of the Semantic ID vocabulary. Default is 1024.
             hidden_size (int): Dimensionality of the model's hidden representations. Default is 256.
             is_encoder_decoder (bool): Indicates if the model is an encoder-decoder architecture. Default is True.
-            decoder_start_token_id (int): The token ID to start decoding with. Default is 0.
             pad_token_id (int): The token ID used for padding sequences. Default is 0.
+            eos_token_id (int): The token ID that indicates the end of a sequence. Default is 1.
+            decoder_start_token_id (int): The token ID to start decoding with. Default is 0.
             tie_word_embeddings (bool): Whether to tie the input and output word embeddings. Default is True.
             use_cache (bool): Whether the model should use past key values to speed up decoding. Default is True.
             **kwargs: Additional keyword arguments for the base `PretrainedConfig`.
         """
         super().__init__(
             is_encoder_decoder=is_encoder_decoder,
-            decoder_start_token_id=decoder_start_token_id,
             pad_token_id=pad_token_id,
+            eos_token_id=eos_token_id,
+            decoder_start_token_id=decoder_start_token_id,
             tie_word_embeddings=tie_word_embeddings,
             **kwargs,
         )

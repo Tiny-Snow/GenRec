@@ -11,7 +11,7 @@ from transformers.cache_utils import EncoderDecoderCache
 from transformers.modeling_layers import GradientCheckpointingLayer
 
 from .attention import MaskedHSTUAttention, MaskedSelfAttentionWithRoPE, T5Attention
-from .feedforward import SwiGLU
+from .feedforward import FeedForwardNetwork, SwiGLU
 from .layernorm import RMSNorm
 from .utils import create_attention_mask
 
@@ -605,8 +605,6 @@ class T5Block(GradientCheckpointingLayer):
     and enhance the attention mechanism, including:
     - Option to switch the original learnable relative attention bias with Rotary Positional
     Embeddings (RoPE) for better extrapolation to longer sequences and improved performance.
-    - We replace the original LayerNorm with RMSNorm for better training stability.
-    - We replace the original feed-forward network with SwiGLU for improved model capacity.
 
     References:
     - Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer. JMLR '20.
@@ -704,7 +702,7 @@ class T5Block(GradientCheckpointingLayer):
             self.cross_attn_layernorm = RMSNorm(hidden_size)
             self.cross_attn_dropout = nn.Dropout(linear_dropout)
 
-        self.mlp = SwiGLU(
+        self.mlp = FeedForwardNetwork(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
             ffn_bias=ffn_bias,

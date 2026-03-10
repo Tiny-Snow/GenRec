@@ -1,0 +1,115 @@
+# A template config file for generative recommendation tasks
+# If you want to add hyperparameter search space, use the "search__" prefix before the parameter name.
+
+# global settings
+seed: 42
+output_dir: null  # TODO: output directory to save model checkpoints, logs, and results
+pretrained_ckpt: null  # optional path to a pretrained checkpoint to load
+test_eval: false  # whether to run evaluation on the test set instead of validation set
+save_predictions: false  # whether to save the predictions on the test set
+
+# dataset settings
+dataset:
+    type: genrec
+
+    interaction_data_path: null  # TODO: path to interaction data file
+    textual_data_path: null  # TODO: path to textual data file
+    sid_cache_path: null  # TODO: path to sid cache file
+
+    max_seq_length: 20
+    min_seq_length: 1
+    truncation_strategy: tail  # tail or slide, tile is equivalent to seqrec's truncation, slide is sliding window truncation
+
+# collator settings
+collator:
+    type: genrec
+
+    # no default parameters for quantizer collator at the moment
+
+# model settings
+model:
+    type: tiger
+
+    config:
+        # base model parameters
+        hidden_size: 256
+        is_encoder_decoder: true
+        decoder_start_token_id: 0
+        pad_token_id: 0
+        tie_word_embeddings: true
+        use_cache: true
+
+        # subclass model parameters
+        num_heads: 4
+        num_encoder_layers: 4
+        num_decoder_layers: 4
+        linear_dropout: 0
+        attention_dropout: 0
+        relative_attention_num_buckets: 32
+        relative_attention_max_distance: 128
+        enable_rope: false
+
+# trainer settings
+trainer:
+    type: ce
+
+    config:
+        # training arguments - Run control
+        do_train: true
+        do_eval: true
+        do_predict: true
+        overwrite_output_dir: true
+        remove_unused_columns: false
+
+        # training arguments - Optimization & schedule
+        num_train_epochs: 200
+        per_device_train_batch_size: 256
+        per_device_eval_batch_size: 128
+        gradient_accumulation_steps: 1  # batch_size = per_device_train_batch_size * num_devices * gradient_accumulation_steps
+        learning_rate: 1.0e-3
+        weight_decay: 0.1
+        max_grad_norm: 1.0
+        optim: adamw_torch
+        lr_scheduler_type: linear
+        warmup_ratio: 0.05
+
+        # training arguments - Evaluation & checkpointing
+        eval_strategy: epoch
+        save_strategy: epoch
+        eval_delay: 0  # skip warmup
+        eval_accumulation_steps: 1
+        save_total_limit: 1  # keep only the best checkpoint
+        load_best_model_at_end: true  # load the best model when finished training
+        metric_for_best_model: ndcg@5  # should exist in the metrics
+        greater_is_better: true
+        prediction_loss_only: false
+        save_safetensors: true
+
+        # training arguments - Parallelism & precision
+        dataloader_num_workers: 0
+        dataloader_pin_memory: true
+        dataloader_drop_last: true
+        ddp_find_unused_parameters: true
+        ddp_broadcast_buffers: false
+        gradient_checkpointing: false
+        bf16: false
+        tf32: true
+
+        # training arguments - Logging / tracking
+        logging_strategy: epoch
+        report_to: ["tensorboard"]
+
+        # base trainer parameters
+        eval_interval: 5  # run metrics every epoch
+        train_stop_epoch: -1  # by default, do not stop training early
+        metrics:
+        - ["hr", {}]
+        - ["ndcg", {}]
+        - ["popularity", {p: [0.1, 0.2]}]
+        - ["unpopularity", {p: [0.2, 0.4]}]
+        model_loss_weight: 0.0
+        top_k: [1, 5, 10]
+        num_beams: 10
+
+        # subclass trainer parameters
+        ce_temperature: 1.0

@@ -46,7 +46,7 @@ class GenRecExample(RecExample):
     Attributes:
         user_id: Identifier of the user to which the example belongs.
         input_ids: Flattened SID tokens derived from `input_item_ids`.
-        labels: SID tokens representing `label_item_ids`.
+        labels: SID tokens representing `label_item_ids`, right-padded with EOS token.
         input_item_ids: Interaction history expressed as item IDs.
         label_item_ids: Positive item ID that should follow the history.
         timestamps: Timestamps aligned with `input_item_ids` in Unix time.
@@ -56,7 +56,7 @@ class GenRecExample(RecExample):
 
     user_id: int
     input_ids: Int[np.ndarray, "L*C"]
-    labels: Int[np.ndarray, "C"]
+    labels: Int[np.ndarray, "C+1"]
     input_item_ids: Int[np.ndarray, "L"]
     label_item_ids: int
     timestamps: Int[np.ndarray, "L"]
@@ -80,7 +80,9 @@ class GenRecDataset(RecDataset[GenRecExample]):
         textual_data_path: Optional[Union[pd.DataFrame, str, Path]] = None,
         lm_encoder: Optional[LMEncoder] = None,
         truncation_strategy: str = "tail",
-        pad_token_id: Optional[int] = None,
+        decoder_start_token_id: Optional[int] = None,
+        eos_token_id: Optional[int] = None,
+        reserved_sids: int = 0,
     ) -> None:
         """Initialises the dataset and materialises user-level metadata.
 
@@ -104,12 +106,39 @@ class GenRecDataset(RecDataset[GenRecExample]):
                 `min_seq_length` to (up to) `max_seq_length`. `"slide"` will use a sliding window of
                 size `max_seq_length` over the entire user history to construct training examples.
                 Defaults to `"tail"`.
-            pad_token_id (Optional[int]): Padding value for SID tokens. This is used for constructing
-                the prefix tree for constrained decoding. If None, defaults to 0.
+            decoder_start_token_id (Optional[int]): Beginning-of-sequence value for SID tokens during
+                decoding. If `None`, defaults to 0.
+            eos_token_id (Optional[int]): End-of-sequence value for SID tokens. If `None`, defaults to 1.
+            reserved_sids (int): Number of reserved SID tokens (e.g., for special tokens like pad, bos, eos).
+                The actual SID are shifted by this value. Defaults to 0.
         """
         assert truncation_strategy in {"tail", "slide"}, f"Unsupported truncation strategy: {truncation_strategy}."
         self.truncation_strategy = truncation_strategy
 
+        self.decoder_start_token_id = decoder_start_token_id if decoder_start_token_id is not None else 0
+        self.eos_token_id = eos_token_id if eos_token_id is not None else 1
+
+        if sid_cache is None:  # pragma: no cover - defensive guard
+            raise ValueError("GenRecDataset requires `sid_cache` to materialise SID tokens.")
+
+        # Shift SIDs, 0 to revserved_sids - 1 are reserved for special tokens
+        self.reserved_sids = reserved_sids
+        sid_cache = sid_cache + reserved_sids
+
+        # Construct prefix tree for constrained decoding, padding with decoder_start_token_id and eos_token_id
+        self._prefix_tree = PrefixTree.from_mapping(
+            {
+                item_id: [decoder_start_token_id] + sid_cache[item_id].tolist() + [eos_token_id]
+                for item_id in range(1, sid_cache.shape[0])
+            }
+        )
+
+        # Cache item ID lookup from SID sequences, not padding with eos_token_id
+        self._sid2item: Dict[Tuple[int, ...], int] = {
+            tuple(sid_cache[item_id].tolist()): item_id for item_id in range(1, sid_cache.shape[0])
+        }
+
+        # Build base RecDataset
         super().__init__(
             interaction_data_path,
             split,
@@ -120,25 +149,8 @@ class GenRecDataset(RecDataset[GenRecExample]):
             lm_encoder,
         )
 
-        if self._sid_cache is None:  # pragma: no cover - defensive guard
-            raise ValueError("GenRecDataset requires `sid_cache` to materialise SID tokens.")
-
         # Recompute training set item popularity
         self._train_item_popularity = self._compute_train_item_popularity()
-
-        # Construct prefix tree for constrained decoding
-        self.pad_token_id = pad_token_id if pad_token_id is not None else 0
-        self._prefix_tree = PrefixTree.from_mapping(
-            {
-                item_id: [self.pad_token_id] + self._sid_cache[item_id].tolist()
-                for item_id in range(1, self.item_size + 1)
-            }
-        )
-
-        # Cache item ID lookup from SID sequences
-        self._sid2item: Dict[Tuple[int, ...], int] = {
-            tuple(self._sid_cache[item_id].tolist()): item_id for item_id in range(1, self.item_size + 1)
-        }
 
     def _build_examples(self) -> List[GenRecExample]:
         """Generates training pairs for encoder-decoder style models using sliding
@@ -212,6 +224,10 @@ class GenRecDataset(RecDataset[GenRecExample]):
         sid_target: Int[np.ndarray, "C"] = self._sid_cache[label_item_id]
         flattened_context = sid_context.reshape(-1).astype(np.int64, copy=True)
         sid_target = sid_target.astype(np.int64, copy=True)
+
+        # pad target with eos token
+        pad_eos = np.full((1,), self.eos_token_id, dtype=np.int64)
+        sid_target = np.concatenate([sid_target, pad_eos], axis=0)
 
         example = GenRecExample(
             user_id=user_id,
@@ -304,8 +320,8 @@ class GenRecCollator(RecCollator[GenRecExample]):
                 User IDs.
             input_ids: `Int[torch.Tensor, "B L*C"]`.
                 Flattened SID tokens aligned with `input_item_ids`.
-            labels: `Int[torch.Tensor, "B C"]`.
-                SID tokens describing `label_item_ids`.
+            labels: `Int[torch.Tensor, "B C+1"]`.
+                SID tokens describing `label_item_ids`, right-padded with EOS token.
             input_item_ids: `Int[torch.Tensor, "B L"]`.
                 Input item ID sequences used for bookkeeping/metrics.
             label_item_ids: `Int[torch.Tensor, "B"]`.

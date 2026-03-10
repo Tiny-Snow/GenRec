@@ -29,3 +29,11 @@ __all__ += [
     "TIGERModelConfig",
     "TIGERModelOutput",
 ]
+
+from .tiger_legacy import TIGERLegacyModel, TIGERLegacyModelConfig, TIGERLegacyModelOutput
+
+__all__ += [
+    "TIGERLegacyModel",
+    "TIGERLegacyModelConfig",
+    "TIGERLegacyModelOutput",
+]

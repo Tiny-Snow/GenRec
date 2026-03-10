@@ -234,9 +234,9 @@ class GenRecTrainer(Trainer, Generic[_GenRecModel, _GenRecTrainingArguments], AB
             f"the maximum value in top_k ({self.max_top_k})."
         )
 
-        # Set <EOS> to <PAD>, set decoder <SOS> token id
+        # Set <PAD>, <EOS>, and decoder_start_token_id from model config
         self.pad_token_id = model.config.pad_token_id
-        self.eos_token_id = model.config.pad_token_id
+        self.eos_token_id = model.config.eos_token_id
         self.decoder_start_token_id = model.config.decoder_start_token_id
         self.use_cache = model.config.use_cache
 
@@ -392,7 +392,7 @@ class GenRecTrainer(Trainer, Generic[_GenRecModel, _GenRecTrainingArguments], AB
 
         label_tensor = inputs[self.label_names[0]]
         assert isinstance(label_tensor, torch.Tensor), "Labels must be a tensor."
-        labels: Int[torch.Tensor, "B C"] = label_tensor.detach()
+        labels: Int[torch.Tensor, "B C+1"] = label_tensor.detach()
 
         # Compute loss
         with torch.no_grad():
@@ -427,6 +427,7 @@ class GenRecTrainer(Trainer, Generic[_GenRecModel, _GenRecTrainingArguments], AB
         # Get predicted sids, scores, and calculate metrics
         batch_size = input_ids.size(0)
         predictions: Int[torch.Tensor, "B num_beams C"]
-        predictions = generation_outputs.sequences.reshape(batch_size, self.num_beams, self.sid_width + 1)[:, :, 1:]
+        predictions = generation_outputs.sequences[:, 1:].reshape(batch_size, self.num_beams, self.sid_width)
+        labels = labels[:, :-1]  # remove eos token for labels
 
         return loss, predictions, labels

@@ -13,7 +13,7 @@ from transformers import PreTrainedModel
 from transformers.cache_utils import Cache, EncoderDecoderCache, DynamicCache
 from transformers.modeling_outputs import BaseModelOutputWithPastAndCrossAttentions
 
-from ..modules import RMSNorm, RotaryEmbedding, T5Block
+from ..modules import FeedForwardNetwork, RMSNorm, RotaryEmbedding, SwiGLU, T5Attention, T5Block
 from ..modules.utils import create_attention_mask
 from .base import (
     GenRecModel,
@@ -325,6 +325,8 @@ class TIGERStack(PreTrainedModel, ShiftRightMixin[TIGERModelConfig]):
                 output_attentions=output_attentions,
             )
 
+            # If gradient checkpointing is enabled, position biases should be detached
+
             # Share the position bias across layers, save self- and cross-attentions
             position_bias = self_attn_outputs[0]
             if self.is_decoder and encoder_hidden_states is not None:
@@ -414,6 +416,48 @@ class TIGERModel(GenRecModel[TIGERModelConfig, TIGERModelOutput, BaseModelOutput
     def decoder(self) -> TIGERStack:
         """Returns the decoder module."""
         return self._decoder
+
+    def _init_weights(self, module: nn.Module) -> None:
+        """Using T5's default initialization, with initializer_factor=1.0.
+
+        .. note::
+            The word embeddings and lm_head are initialized in T5 with std=1.0, which is significantly
+            different from the default init in HuggingFace's PreTrainedModel (std=0.02). It's recommended
+            to keep the default T5 initialization for better performance. You may override this method
+            if you want to use a different initialization strategy or additional modules.
+        """
+        factor = 1.0
+
+        if isinstance(module, RMSNorm):
+            module.weight.data.fill_(1.0)
+
+        elif isinstance(module, TIGERModel):
+            module.shared.weight.data.normal_(mean=0.0, std=factor * 1.0)
+            if hasattr(module, "lm_head") and not self.config.tie_word_embeddings:
+                module.lm_head.weight.data.normal_(mean=0.0, std=factor * 1.0)
+
+        elif isinstance(module, SwiGLU):
+            for linear in [module.gate_proj, module.up_proj, module.down_proj]:
+                linear.weight.data.normal_(mean=0.0, std=factor * (module.hidden_size**-0.5))
+                if hasattr(linear, "bias") and linear.bias is not None:
+                    linear.bias.data.zero_()
+
+        elif isinstance(module, FeedForwardNetwork):
+            for linear in [module.fc1, module.fc2]:
+                linear.weight.data.normal_(mean=0.0, std=factor * (module.input_size**-0.5))
+                if hasattr(linear, "bias") and linear.bias is not None:
+                    linear.bias.data.zero_()
+
+        elif isinstance(module, T5Attention):
+            d_model = module.hidden_size
+            d_kv = module.head_dim
+            num_heads = module.num_heads
+            module.q.weight.data.normal_(mean=0.0, std=factor * ((d_model * d_kv) ** -0.5))
+            module.k.weight.data.normal_(mean=0.0, std=factor * (d_model**-0.5))
+            module.v.weight.data.normal_(mean=0.0, std=factor * (d_model**-0.5))
+            module.o.weight.data.normal_(mean=0.0, std=factor * ((num_heads * d_kv) ** -0.5))
+            if module.rel_pos_bias is not None:
+                module.rel_pos_bias.relative_attention_bias.weight.data.normal_(mean=0.0, std=factor * (d_model**-0.5))
 
     def forward(
         self,

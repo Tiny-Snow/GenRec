@@ -195,7 +195,7 @@ def calc_metric_hr(
     """
     K = topk_sids.shape[1]
     hits = (topk_sids == labels.unsqueeze(1)).all(dim=-1).float()
-    hr = hits.mean().item() * K
+    hr = hits.any(dim=1).float().mean().item()
     return {f"hr@{K}": hr}
 
 
@@ -218,9 +218,9 @@ def calc_metric_ndcg(
         Dict[str, float]: Mapping from "ndcg@K" to its computed value.
     """
     K = topk_sids.shape[1]
-    relevance = (topk_sids == labels.unsqueeze(1)).all(dim=-1).float()
+    hits = (topk_sids == labels.unsqueeze(1)).all(dim=-1).float()
     discounts = 1.0 / torch.log2(torch.arange(2, K + 2, device=topk_sids.device, dtype=torch.float32))
-    dcg = (relevance * discounts.view(1, -1)).sum(dim=1)
+    dcg = (hits * discounts.view(1, -1)).max(dim=1).values
     ndcg = dcg.mean().item()
     return {f"ndcg@{K}": ndcg}
 
