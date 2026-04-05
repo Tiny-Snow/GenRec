@@ -207,6 +207,8 @@ class SeqRecCollator(RecCollator[SeqRecExample]):
         )
 
         self._item_size = dataset.item_size
+        self._item_popularity = dataset.item_popularity
+        self._popularity_threshold = np.percentile(self._item_popularity, 70)  # for popularity-based sampling
 
         need_pad_keys: Dict[str, type] = {
             "input_ids": np.int64,
@@ -252,3 +254,9 @@ class SeqRecCollator(RecCollator[SeqRecExample]):
             batch_seed=batch_seed,
         )
         no_pad_batch["negative_item_ids"] = negative_item_ids
+
+        input_ids = need_pad_batch["input_ids"]
+        input_popularity = self._item_popularity[input_ids]
+        # need_pad_batch["input_popularity"] = input_popularity
+        input_is_pop = input_popularity >= self._popularity_threshold
+        need_pad_batch["input_is_pop"] = input_is_pop

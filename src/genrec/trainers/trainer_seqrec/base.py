@@ -217,6 +217,13 @@ def compute_seqrec_metrics(
     topk_indices: Int[torch.Tensor, "B K"]
     if isinstance(prediction.predictions, tuple):  # pragma: no cover - rarely used
         topk_indices = torch.as_tensor(prediction.predictions[0], dtype=torch.long, device=torch_device)
+        sigma_prop = torch.as_tensor(prediction.predictions[1], dtype=torch.float, device=torch_device)
+        sigma = torch.as_tensor(prediction.predictions[2], dtype=torch.float, device=torch_device)
+        fro = torch.as_tensor(prediction.predictions[3], dtype=torch.float, device=torch_device)
+        pop_attn_score = torch.as_tensor(prediction.predictions[4], dtype=torch.float, device=torch_device)
+        unpop_attn_score = torch.as_tensor(prediction.predictions[5], dtype=torch.float, device=torch_device)
+        # pop_attn_spearman = torch.as_tensor(prediction.predictions[2], dtype=torch.float, device=torch_device)
+        u_v_similarity = torch.as_tensor(prediction.predictions[6], dtype=torch.float, device=torch_device)
     else:
         topk_indices = torch.as_tensor(prediction.predictions, dtype=torch.long, device=torch_device)
 
@@ -229,6 +236,15 @@ def compute_seqrec_metrics(
     last_step_labels = torch.as_tensor(labels[:, -1], dtype=torch.long, device=torch_device)
 
     results: Dict[str, float] = {}
+
+    results["sigma_prop"] = sigma_prop.mean().item()
+    results["pop_attn_score"] = pop_attn_score.mean().item()
+    results["unpop_attn_score"] = unpop_attn_score.mean().item()
+    # results["pop_attn_spearman"] = pop_attn_spearman.mean().item()
+    results["u_v_similarity"] = u_v_similarity.mean().item()
+    results["sigma"] = sigma.mean().item()
+    results["fro"] = fro.mean().item()
+
     for k in top_k:
         sliced_topk_indices = topk_indices[:, :k]
         for metric_name, metric_params in metrics:
@@ -360,6 +376,7 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
         outputs: SeqRecOutput = model(
             **inputs,
             output_model_loss=model.training,  # only compute model loss during training
+            output_attentions=True,
         )
         assert isinstance(outputs, SeqRecOutput), "Model output must be an instance of SeqRecOutput."
 
@@ -381,13 +398,102 @@ class SeqRecTrainer(Trainer, Generic[_SeqRecModel, _SeqRecTrainingArguments], AB
             logits: Float[torch.Tensor, "B I+1"]
             logits = last_step_hidden_states @ item_embed_weight.T
 
+            S = torch.linalg.svd(logits, full_matrices=False)
+            sigma = S[1].max()  # largest singular value, scalar
+            fro = torch.linalg.matrix_norm(logits, ord='fro')
+            sigma_prop = sigma / fro
+
             effective_top_k = max(1, min(self.max_top_k, self.item_size))
             _, topk_indices = torch.topk(logits, k=effective_top_k, dim=-1)  # may predict padding index
 
             output_dict: Dict[str, torch.Tensor] = {
                 "loss": loss,
                 "topk_indices": topk_indices.detach(),
+                "sigma_prop": sigma_prop.detach(),
+                "sigma": sigma.detach(),
+                "fro": fro.detach(),
             }
+
+            # print("sigma_prop:", sigma_prop.item())
+            print("sigma_prop:", sigma_prop.item(), "sigma:", sigma.item(), "fro:", fro.item())
+
+            if outputs.attentions is not None and len(outputs.attentions) > 0:
+                last_layer_attn: Float[torch.Tensor, "B H L L"] = outputs.attentions[-1]
+                attention_mask: Int[torch.Tensor, "B L"] = inputs["attention_mask"]
+                from ...models.modules.utils import create_attention_mask
+
+                causal_mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
+                last_layer_attn = last_layer_attn.masked_fill(causal_mask, 0.0)
+
+                attn_summed_h: Float[torch.Tensor, "B L L"] = last_layer_attn.sum(dim=1)
+
+                attn_score: Float[torch.Tensor, "B L"] = attn_summed_h.sum(dim=1)
+
+                # U, S, Vh = torch.linalg.svd(attn_summed_h)
+                # main_left_vectors: Float[torch.Tensor, "B L"] = U[..., 0]
+                # main_right_vectors: Float[torch.Tensor, "B L"] = Vh[..., 0]
+
+                # # normalize
+                # # main_left_vectors = main_left_vectors / (main_left_vectors.norm(dim=-1, keepdim=True))
+                # # main_right_vectors = main_right_vectors / (main_right_vectors.norm(dim=-1, keepdim=True))
+
+                # cos_similarity_scores: Float[torch.Tensor, "B"] = torch.sum(
+                #     main_left_vectors * main_right_vectors, dim=-1
+                # )
+                # mean_similarity_scores = cos_similarity_scores.mean(dim=0)  # scalar
+
+                # input_popularity = inputs.get("input_popularity")
+                # if input_popularity is not None:
+
+                #     # spearman corr between input popularity and attention score, need mask
+                #     input_popularity.masked_fill_(attention_mask == 0, 0.0)
+                #     input_popularity_flat = input_popularity.view(-1).cpu().numpy()
+                #     attn_score_flat = attn_score.view(-1).cpu().numpy()
+
+                #     spearman_corr = np.corrcoef(input_popularity_flat, attn_score_flat)[0, 1]
+                #     output_dict["pop_attn_spearman"] = torch.tensor(spearman_corr, device=attn_score.device)
+                input_is_pop = inputs.get("input_is_pop")
+                if input_is_pop is not None:
+                    input_is_pop = input_is_pop.bool()
+                    pad_mask = attention_mask == 0
+
+                    pop_mask = input_is_pop & ~pad_mask
+                    unpop_mask = ~input_is_pop & ~pad_mask
+
+                    pop_count = pop_mask.sum().float()
+                    unpop_count = unpop_mask.sum().float()
+
+                    if pop_count > 0:
+                        pop_mean_score = attn_score[pop_mask].sum()
+                    else:
+                        pop_mean_score = torch.tensor(0.0, device=attn_score.device)
+
+                    if unpop_count > 0:
+                        unpop_mean_score = attn_score[unpop_mask].sum()
+                    else:
+                        unpop_mean_score = torch.tensor(0.0, device=attn_score.device)
+
+                    output_dict["pop_attn_score"] = pop_mean_score.detach()
+                    output_dict["unpop_attn_score"] = unpop_mean_score.detach()
+
+                attn_matrix: Float[torch.Tensor, "L L"] = attn_summed_h.mean(
+                    dim=0
+                )  # average over batch and heads, shape (L, L)
+                U, S, Vh = torch.linalg.svd(attn_matrix)
+                k = min(10, S.numel())
+                left = U[:, :k]  # (L, k)
+                right = Vh[:k, :].T  # (L, k)  (transpose rows of Vh)
+                # per-component dot and norms
+                numer = (left * right).sum(dim=0)  # (k,)
+                denom = left.norm(dim=0) * right.norm(dim=0)
+                cosines = numer / (denom)  # (k,)
+                # simple mean and singular-value-weighted mean
+                mean_cos = cosines.mean()
+                weights = S[:k] / (S[:k].sum())
+                weighted_mean_cos = (cosines * weights).sum()
+                # choose weighted_mean_cos as the main metric (more robust to scale)
+                mean_similarity_scores = weighted_mean_cos
+                output_dict["u_v_similarity"] = mean_similarity_scores.detach()
             return loss, output_dict
         else:
             return loss

@@ -37,6 +37,8 @@ class LlamaDecoderLayer(GradientCheckpointingLayer):
         attention_dropout: float = 0.0,
         attention_bias: bool = False,
         ffn_bias: bool = False,
+        enable_ffn: bool = True,
+        enable_attn: bool = True,
     ) -> None:
         """Initializes LlamaDecoderLayer module.
 
@@ -59,20 +61,31 @@ class LlamaDecoderLayer(GradientCheckpointingLayer):
         self.attention_bias = attention_bias
         self.ffn_bias = ffn_bias
 
-        self.self_attn = MaskedSelfAttentionWithRoPE(
-            hidden_size=hidden_size,
-            head_dim=self.head_dim,
-            num_heads=num_heads,
-            attention_dropout=attention_dropout,
-            attention_bias=attention_bias,
-        )
-        self.mlp = SwiGLU(
-            hidden_size=hidden_size,
-            intermediate_size=intermediate_size,
-            ffn_bias=ffn_bias,
-        )
+        # 根据 enable_attn 决定是否创建 attention 模块
+        self.enable_attn = enable_attn
+        if self.enable_attn:
+            self.self_attn = MaskedSelfAttentionWithRoPE(
+                hidden_size=hidden_size,
+                head_dim=self.head_dim,
+                num_heads=num_heads,
+                attention_dropout=attention_dropout,
+                attention_bias=attention_bias,
+            )
+        else:
+            self.self_attn = None
+        # 根据 enable_ffn 决定是否创建 FFN（SwiGLU）与对应的后置 LayerNorm
+        self.enable_ffn = enable_ffn
+        if self.enable_ffn:
+            self.mlp = SwiGLU(
+                hidden_size=hidden_size,
+                intermediate_size=intermediate_size,
+                ffn_bias=ffn_bias,
+            )
+            self.post_attention_layernorm = RMSNorm(hidden_size)
+        else:
+            self.mlp = None
+            self.post_attention_layernorm = None
         self.input_layernorm = RMSNorm(hidden_size)
-        self.post_attention_layernorm = RMSNorm(hidden_size)
 
     def forward(
         self,
@@ -96,17 +109,24 @@ class LlamaDecoderLayer(GradientCheckpointingLayer):
                 tensor and the attention weights tensor.
         """
         residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
-        hidden_states, attn_weights = self.self_attn(
-            hidden_states,
-            attention_mask=attention_mask,
-            position_embeddings=position_embeddings,
-        )
-        hidden_states = residual + hidden_states
+        if self.enable_attn and self.self_attn is not None:
+            hidden_states = self.input_layernorm(hidden_states)
+            hidden_states, attn_weights = self.self_attn(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_embeddings=position_embeddings,
+            )
+            hidden_states = residual + hidden_states
+        else:
+            # attention 被禁用时，返回零 attention weight，并保持 hidden_states 不变（仅 residual）
+            B, L, _ = hidden_states.shape
+            attn_weights = hidden_states.new_zeros((B, self.num_heads, L, L))
+            hidden_states = residual
 
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = residual + self.mlp(hidden_states)
+        if self.enable_ffn and self.mlp is not None and self.post_attention_layernorm is not None:
+            residual = hidden_states
+            hidden_states = self.post_attention_layernorm(hidden_states)
+            hidden_states = residual + self.mlp(hidden_states)
 
         return hidden_states, attn_weights
 

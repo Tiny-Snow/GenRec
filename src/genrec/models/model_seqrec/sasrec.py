@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from jaxtyping import Float, Int
 import torch
@@ -35,6 +35,8 @@ class SASRecModelConfig(SeqRecModelConfig):
         attention_dropout: float = 0.0,
         attention_bias: bool = False,
         ffn_bias: bool = False,
+        disabled_ffn_layers: Optional[List[int]] = None,
+        disabled_attn_layers: Optional[List[int]] = None,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
@@ -45,12 +47,17 @@ class SASRecModelConfig(SeqRecModelConfig):
                 Default is False.
             ffn_bias (bool): Whether to include bias terms in the feed-forward network projections.
                 Default is False.
+            disabled_ffn_layers (Optional[List[int]]): 指定要禁用 FFN 的层索引（0-based）。None 或 [] 表示所有层启用 FFN。
+            disabled_attn_layers (Optional[List[int]]): 指定要禁用 attention 的层索引（0-based）
             **kwargs (Any): Additional keyword arguments for the base `SeqRecModelConfig`.
         """
         super().__init__(**kwargs)
         self.attention_dropout = attention_dropout
         self.attention_bias = attention_bias
         self.ffn_bias = ffn_bias
+        self.disabled_ffn_layers = disabled_ffn_layers or []
+        # 指定要禁用 attention 的层索引（0-based）
+        self.disabled_attn_layers = disabled_attn_layers or []
 
 
 @SeqRecOutputFactory.register("sasrec")
@@ -99,8 +106,10 @@ class SASRecModel(SeqRecModel[SASRecModelConfig, SASRecModelOutput]):
                     attention_dropout=config.attention_dropout,
                     attention_bias=config.attention_bias,
                     ffn_bias=config.ffn_bias,
+                    enable_ffn=(i not in set(config.disabled_ffn_layers)),
+                    enable_attn=(i not in set(config.disabled_attn_layers)),
                 )
-                for _ in range(config.num_hidden_layers)
+                for i in range(config.num_hidden_layers)
             ]
         )
         self.rotary_emb = RotaryEmbedding(head_dim=self.head_dim)
