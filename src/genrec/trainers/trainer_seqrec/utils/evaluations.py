@@ -16,6 +16,8 @@ __all__ = [
     "SeqRecMetricFn",
     "calc_metric_hr",
     "calc_metric_ndcg",
+    "calc_metric_arp",
+    "calc_metric_gini",
     "calc_metric_popularity",
     "calc_metric_unpopularity",
     "clip_top_k",
@@ -235,6 +237,92 @@ def calc_metric_popularity(
         results[f"popularity@{K}-{threshold}"] = (pop_sum / pred_sum).item()
 
     return results
+
+
+@SeqRecMetricFactory.register("arp")
+def calc_metric_arp(
+    topk_indices: Int[torch.Tensor, "B K"],
+    labels: Int[torch.Tensor, "B"],
+    train_dataset: SeqRecDataset,
+    target_k: int = 5,
+    **kwargs: Any,
+) -> Dict[str, float]:
+    """Calculate Average Recommendation Popularity (ARP) at a fixed cutoff.
+
+    ARP is computed as the mean training popularity of all recommended items across
+    all users and all recommendation positions. Since :func:`compute_seqrec_metrics`
+    aggregates predictions over the full evaluation set before invoking metric
+    functions, this value is naturally computed across batches.
+
+    Args:
+        topk_indices (Int[torch.Tensor, "B K"]): Tensor containing top-K predicted item indices.
+        labels (Int[torch.Tensor, "B"]): Ground-truth labels (unused, kept for uniform signature).
+        train_dataset (SeqRecDataset): Training dataset used to obtain item popularity counts.
+        target_k (int): Fixed cutoff at which to report ARP. Defaults to 5.
+
+    Returns:
+        Dict[str, float]: Dictionary mapping ``"arp@5"`` to its float value when ``K == target_k``;
+            otherwise an empty dictionary.
+    """
+    del labels  # unused
+
+    K = topk_indices.shape[1]
+    if K != target_k:
+        return {}
+
+    item_popularity = torch.as_tensor(train_dataset.train_item_popularity, device=topk_indices.device, dtype=torch.float32)
+    recommended_popularity = item_popularity[topk_indices]
+    arp = recommended_popularity.mean().item()
+    return {f"arp@{K}": arp}
+
+
+@SeqRecMetricFactory.register("gini")
+def calc_metric_gini(
+    topk_indices: Int[torch.Tensor, "B K"],
+    labels: Int[torch.Tensor, "B"],
+    train_dataset: SeqRecDataset,
+    target_k: int = 5,
+    **kwargs: Any,
+) -> Dict[str, float]:
+    """Calculate the Gini coefficient of item exposure counts at a fixed cutoff.
+
+    Let ``x_i`` denote the number of times item ``i`` appears in the top-K
+    recommendations over the entire evaluation set. The Gini coefficient is:
+
+    .. math::
+        \\mathrm{Gini} = \\frac{\\sum_i \\sum_j |x_i - x_j|}{2n \\sum_i x_i}
+
+    where ``n`` is the number of non-padding items. We compute an equivalent
+    sorted-vector formulation for efficiency while still aggregating exposure
+    counts across the whole evaluation set.
+
+    Args:
+        topk_indices (Int[torch.Tensor, "B K"]): Tensor containing top-K predicted item indices.
+        labels (Int[torch.Tensor, "B"]): Ground-truth labels (unused, kept for uniform signature).
+        train_dataset (SeqRecDataset): Training dataset used only to infer catalogue size.
+        target_k (int): Fixed cutoff at which to report Gini. Defaults to 5.
+
+    Returns:
+        Dict[str, float]: Dictionary mapping ``"gini@5"`` to its float value when ``K == target_k``;
+            otherwise an empty dictionary.
+    """
+    del labels  # unused
+
+    K = topk_indices.shape[1]
+    if K != target_k:
+        return {}
+
+    item_size = train_dataset.item_size
+    exposure_counts = torch.bincount(topk_indices.reshape(-1), minlength=item_size + 1)[1:].to(torch.float32)
+    total_exposure = exposure_counts.sum()
+    if total_exposure <= 0:
+        return {f"gini@{K}": 0.0}
+
+    sorted_exposure, _ = torch.sort(exposure_counts)
+    num_items = sorted_exposure.numel()
+    ranks = torch.arange(1, num_items + 1, device=sorted_exposure.device, dtype=torch.float32)
+    gini = ((2 * ranks - num_items - 1) * sorted_exposure).sum() / (num_items * total_exposure)
+    return {f"gini@{K}": gini.item()}
 
 
 @SeqRecMetricFactory.register("unpopularity")
