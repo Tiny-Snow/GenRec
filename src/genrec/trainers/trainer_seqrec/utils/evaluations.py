@@ -264,13 +264,13 @@ def calc_metric_arp(
         Dict[str, float]: Dictionary mapping ``"arp@5"`` to its float value when ``K == target_k``;
             otherwise an empty dictionary.
     """
-    del labels  # unused
-
     K = topk_indices.shape[1]
     if K != target_k:
         return {}
 
-    item_popularity = torch.as_tensor(train_dataset.train_item_popularity, device=topk_indices.device, dtype=torch.float32)
+    item_popularity = torch.as_tensor(
+        train_dataset.train_item_popularity, device=topk_indices.device, dtype=torch.float32
+    )
     recommended_popularity = item_popularity[topk_indices]
     arp = recommended_popularity.mean().item()
     return {f"arp@{K}": arp}
@@ -306,8 +306,6 @@ def calc_metric_gini(
         Dict[str, float]: Dictionary mapping ``"gini@5"`` to its float value when ``K == target_k``;
             otherwise an empty dictionary.
     """
-    del labels  # unused
-
     K = topk_indices.shape[1]
     if K != target_k:
         return {}
