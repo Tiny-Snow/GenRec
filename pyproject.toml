@@ -1,13 +1,8 @@
 [project]
 name = "genrec"
 version = "0.1.0"
-description = "Unified generative recommendation research framework"
-authors = [
-    { name = "Tiny_Snow", email = "futurelover10032@gmail.com" }
-]
-license = "MIT"
+license = "GPL-3.0"
 readme = "README.md"
-keywords = ["recommendation", "generative-recommendation"]
 
 [tool.poetry.dependencies]
 python = ">=3.13,<3.15"
