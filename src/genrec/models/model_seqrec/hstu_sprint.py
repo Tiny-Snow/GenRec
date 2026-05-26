@@ -1,4 +1,4 @@
-"""SeqRec Model: HSTU with Spring regularization."""
+"""SeqRec Model: HSTU with SPRINT regularization."""
 
 from __future__ import annotations
 
@@ -14,31 +14,31 @@ from ..modules import (
     LearnableInputPositionalEmbedding,
     RMSNorm,
     RotaryEmbedding,
-    SpringSequentialTransductionUnit,
+    SPRINTSequentialTransductionUnit,
     create_attention_mask,
-    spring_power_iteration,
+    sprint_power_iteration,
 )
 from .base import SeqRecModel, SeqRecModelFactory, SeqRecModelConfigFactory, SeqRecOutputFactory
 from .hstu import HSTUModelConfig, HSTUModelOutput
 
 __all__ = [
-    "HSTUSpringModel",
-    "HSTUSpringModelConfig",
-    "HSTUSpringModelOutput",
+    "HSTUSPRINTModel",
+    "HSTUSPRINTModelConfig",
+    "HSTUSPRINTModelOutput",
 ]
 
 
-@SeqRecModelConfigFactory.register("hstu_spring")
-class HSTUSpringModelConfig(HSTUModelConfig):
-    """Configuration class for HSTU model with Spring regularization, which
+@SeqRecModelConfigFactory.register("hstu_sprint")
+class HSTUSPRINTModelConfig(HSTUModelConfig):
+    """Configuration class for HSTU model with SPRINT regularization, which
     extends `HSTUModelConfig`."""
 
     def __init__(
         self,
-        spring_attention_weight: float = 1.0,
-        spring_ffn_weight: float = 0.001,
-        spring_emb_weight: float = 0.1,
-        spring_attention_temperature: float = 4.0,
+        sprint_attention_weight: float = 1.0,
+        sprint_ffn_weight: float = 0.001,
+        sprint_emb_weight: float = 0.1,
+        sprint_attention_temperature: float = 4.0,
         spectral_norm_iters: int = 1,
         norm_embeddings: bool = False,
         **kwargs,
@@ -46,34 +46,34 @@ class HSTUSpringModelConfig(HSTUModelConfig):
         """Initializes the configuration with model hyperparameters.
 
         Args:
-            spring_attention_weight (float): Weight for the Spring regularization on
+            sprint_attention_weight (float): Weight for the SPRINT regularization on
                 attention module. Default is 1.0.
-            spring_ffn_weight (float): Weight for the Spring regularization on feed-forward
+            sprint_ffn_weight (float): Weight for the SPRINT regularization on feed-forward
                 network module. Note that this is only effective when `enable_ffn` is True in
                 the base `HSTUModelConfig`. Default is 0.001.
-            spring_emb_weight (float): Weight for the Spring regularization on item
+            sprint_emb_weight (float): Weight for the SPRINT regularization on item
                 embedding matrix. Default is 0.1.
-            spring_attention_temperature (float): Temperature for the Spring regularization
+            sprint_attention_temperature (float): Temperature for the SPRINT regularization
                 on attention module. Default is 4.0.
             spectral_norm_iters (int): Number of power iteration steps for spectral norm
                 estimation. Default is 1.
             norm_embeddings (bool): Whether to L2-normalize the item embeddings before
-                computing Spring regularization. Default is False.
+                computing SPRINT regularization. Default is False.
             **kwargs (Any): Additional keyword arguments for the base `HSTUModelConfig`.
         """
         super().__init__(**kwargs)
-        self.spring_attention_weight = spring_attention_weight
-        self.spring_ffn_weight = spring_ffn_weight
-        self.spring_emb_weight = spring_emb_weight
-        self.spring_attention_temperature = spring_attention_temperature
+        self.sprint_attention_weight = sprint_attention_weight
+        self.sprint_ffn_weight = sprint_ffn_weight
+        self.sprint_emb_weight = sprint_emb_weight
+        self.sprint_attention_temperature = sprint_attention_temperature
         self.spectral_norm_iters = spectral_norm_iters
         self.norm_embeddings = norm_embeddings
 
 
-@SeqRecOutputFactory.register("hstu_spring")
+@SeqRecOutputFactory.register("hstu_sprint")
 @dataclass
-class HSTUSpringModelOutput(HSTUModelOutput):
-    """Output class for HSTU model with Spring regularization.
+class HSTUSPRINTModelOutput(HSTUModelOutput):
+    """Output class for HSTU model with SPRINT regularization.
 
     The `HSTUModelOutput` extends the `HSTUModelOutput` without adding any
     additional attributes.
@@ -82,27 +82,27 @@ class HSTUSpringModelOutput(HSTUModelOutput):
     pass
 
 
-# TODO: add my own paper about Spring regularization.
-@SeqRecModelFactory.register("hstu_spring")
-class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput]):
-    """HSTU model with Spring regularization.
+@SeqRecModelFactory.register("hstu_sprint")
+class HSTUSPRINTModel(SeqRecModel[HSTUSPRINTModelConfig, HSTUSPRINTModelOutput]):
+    """HSTU model with SPRINT regularization.
 
-    Here we reuse the `HSTUModel` network architecture and add Spring regularization
-    as the `model_loss` in the `HSTUSpringModelOutput`.
+    Here we reuse the `HSTUModel` network architecture and add SPRINT regularization
+    as the `model_loss` in the `HSTUSPRINTModelOutput`.
 
     References:
     - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
         Generative Recommendations. ICML '24.
-    - ...
+    - Mitigating Popularity Bias Amplification in Scaling Transformer-based Sequential
+        Recommenders. KDD '26.
     """
 
-    config_class = HSTUSpringModelConfig
+    config_class = HSTUSPRINTModelConfig
     supports_gradient_checkpointing = True
 
-    def __init__(self, config: HSTUSpringModelConfig) -> None:
+    def __init__(self, config: HSTUSPRINTModelConfig) -> None:
         """Initializes HSTU model with the given configuration."""
         super().__init__(config)
-        self.config: HSTUSpringModelConfig
+        self.config: HSTUSPRINTModelConfig
 
         assert (
             config.hidden_size % config.num_attention_heads == 0
@@ -124,7 +124,7 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
 
         self.layers = nn.ModuleList(
             [
-                SpringSequentialTransductionUnit(
+                SPRINTSequentialTransductionUnit(
                     hidden_size=config.hidden_size,
                     num_heads=config.num_attention_heads,
                     intermediate_size=config.hidden_size * 4,
@@ -135,7 +135,7 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
                     enable_learnable_rel_posemb=config.enable_learnable_rel_posemb,
                     enable_attention_gating=config.enable_attention_gating,
                     enable_ffn=config.enable_ffn,
-                    spring_attention_temperature=config.spring_attention_temperature,
+                    sprint_attention_temperature=config.sprint_attention_temperature,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
@@ -156,8 +156,8 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
         output_hidden_states: bool = False,
         output_attentions: bool = False,
         **kwargs,
-    ) -> HSTUSpringModelOutput:
-        """Forward pass for HSTU model with Spring regularization.
+    ) -> HSTUSPRINTModelOutput:
+        """Forward pass for HSTU model with SPRINT regularization.
 
         Args:
             input_ids (Int[torch.Tensor, "B L"]): Input item ID sequences of shape (batch_size, seq_len).
@@ -172,7 +172,7 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
                 The timestamps are assumed to be Unix format (in seconds).
 
         Returns:
-            HSTUSpringModelOutput: Model outputs packaged as a `HSTUSpringModelOutput` instance.
+            HSTUSPRINTModelOutput: Model outputs packaged as a `HSTUSPRINTModelOutput` instance.
         """
         d = self.config.hidden_size
         H = self.config.num_attention_heads
@@ -198,23 +198,23 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
         if self.config.enable_input_pos_emb and self.input_pos_emb is not None:
             hidden_states = self.input_pos_emb(hidden_states)
 
-        # Spring regularizations
-        spring_loss_emb = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
-        spring_loss_attn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
-        spring_loss_ffn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
+        # SPRINT regularizations
+        sprint_loss_emb = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
+        sprint_loss_attn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
+        sprint_loss_ffn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
 
-        # Spring regularization on item embeddings
+        # SPRINT regularization on item embeddings
         if output_model_loss:
             item_embed_weight: Float[torch.Tensor, "I+1 d"] = self.item_embed_weight
             if self.config.norm_embeddings:
                 item_embed_weight = F.normalize(item_embed_weight, p=2, dim=-1)
-            item_emb_sn = spring_power_iteration(
+            item_emb_sn = sprint_power_iteration(
                 self,
                 item_embed_weight,
                 name="item_embed_weight",
                 spectral_norm_iters=self.config.spectral_norm_iters,
             )
-            spring_loss_emb = item_emb_sn.log1p()
+            sprint_loss_emb = item_emb_sn.log1p()
 
         all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
         all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
@@ -236,40 +236,40 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
             if output_attentions:
                 all_attentions.append(attn_weights)
 
-            # Spring regularizations on attention modules
+            # SPRINT regularizations on attention modules
             if output_model_loss and attn_weight_sn is not None:
                 attn_Wo: Float[torch.Tensor, "d H*d_head"] = layer._layer.self_attn.o_proj.weight
-                attn_Wo_sn = spring_power_iteration(layer, attn_Wo, name=f"attn_wo", spectral_norm_iters=iters)
+                attn_Wo_sn = sprint_power_iteration(layer, attn_Wo, name=f"attn_wo", spectral_norm_iters=iters)
 
                 attn_Wv: Float[torch.Tensor, "H d_head d"] = layer._layer.self_attn.v_proj.weight.view(H, head_dim, d)
                 attn_Av_sn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
                 for head in range(H):
                     attn_Wv_h: Float[torch.Tensor, "d_head d"] = attn_Wv[head]
-                    attn_Wv_h_sn = spring_power_iteration(
+                    attn_Wv_h_sn = sprint_power_iteration(
                         layer, attn_Wv_h, name=f"attn_head_{head}_wv", spectral_norm_iters=iters
                     )
                     attn_weight_h_sn: Float[torch.Tensor, ""] = attn_weight_sn[head]
                     attn_Av_sn = attn_Av_sn + attn_weight_h_sn * attn_Wv_h_sn.pow(2)
 
-                spring_loss_attn = spring_loss_attn + (attn_Av_sn.sqrt() * attn_Wo_sn).log1p()
+                sprint_loss_attn = sprint_loss_attn + (attn_Av_sn.sqrt() * attn_Wo_sn).log1p()
 
-            # Spring regularizations on feed-forward network modules
+            # SPRINT regularizations on feed-forward network modules
             if output_model_loss and self.config.enable_ffn and layer._layer.mlp is not None:
                 ffn_W1 = layer._layer.mlp.up_proj.weight
                 ffn_W2 = layer._layer.mlp.down_proj.weight
-                ffn_W1_sn = spring_power_iteration(layer, ffn_W1, name=f"ffn_w1", spectral_norm_iters=iters)
-                ffn_W2_sn = spring_power_iteration(layer, ffn_W2, name=f"ffn_w2", spectral_norm_iters=iters)
-                spring_loss_ffn = spring_loss_ffn + (ffn_W1_sn * ffn_W2_sn).log1p()
+                ffn_W1_sn = sprint_power_iteration(layer, ffn_W1, name=f"ffn_w1", spectral_norm_iters=iters)
+                ffn_W2_sn = sprint_power_iteration(layer, ffn_W2, name=f"ffn_w2", spectral_norm_iters=iters)
+                sprint_loss_ffn = sprint_loss_ffn + (ffn_W1_sn * ffn_W2_sn).log1p()
 
         # normalize by number of layers
-        spring_loss_attn = spring_loss_attn / self.config.num_hidden_layers
-        spring_loss_ffn = spring_loss_ffn / self.config.num_hidden_layers
+        sprint_loss_attn = sprint_loss_attn / self.config.num_hidden_layers
+        sprint_loss_ffn = sprint_loss_ffn / self.config.num_hidden_layers
 
-        # model loss: Spring regularization
+        # model loss: SPRINT regularization
         model_loss = (
-            self.config.spring_attention_weight * spring_loss_attn
-            + self.config.spring_ffn_weight * spring_loss_ffn
-            + self.config.spring_emb_weight * spring_loss_emb
+            self.config.sprint_attention_weight * sprint_loss_attn
+            + self.config.sprint_ffn_weight * sprint_loss_ffn
+            + self.config.sprint_emb_weight * sprint_loss_emb
         )
 
         # NOTE: in the official HSTU code, there is no final layer norm,
@@ -281,7 +281,7 @@ class HSTUSpringModel(SeqRecModel[HSTUSpringModelConfig, HSTUSpringModelOutput])
         if output_hidden_states:
             all_hidden_states.append(hidden_states)
 
-        return HSTUSpringModelOutput(
+        return HSTUSPRINTModelOutput(
             last_hidden_state=hidden_states,
             model_loss=model_loss if output_model_loss else None,
             hidden_states=tuple(all_hidden_states) if output_hidden_states else None,

@@ -1,4 +1,4 @@
-"""SeqRec Model: SASRec with Spring regularization."""
+"""SeqRec Model: SASRec with SPRINT regularization."""
 
 from __future__ import annotations
 
@@ -9,86 +9,86 @@ from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
 
-from ..modules import SpringLlamaDecoderLayer, RMSNorm, RotaryEmbedding, create_attention_mask, spring_power_iteration
+from ..modules import SPRINTLlamaDecoderLayer, RMSNorm, RotaryEmbedding, create_attention_mask, sprint_power_iteration
 from .base import SeqRecModel, SeqRecModelConfigFactory, SeqRecModelFactory, SeqRecOutputFactory
 from .sasrec import SASRecModelConfig, SASRecModelOutput
 
 __all__ = [
-    "SASRecSpringModel",
-    "SASRecSpringModelConfig",
-    "SASRecSpringModelOutput",
+    "SASRecSPRINTModel",
+    "SASRecSPRINTModelConfig",
+    "SASRecSPRINTModelOutput",
 ]
 
 
-@SeqRecModelConfigFactory.register("sasrec_spring")
-class SASRecSpringModelConfig(SASRecModelConfig):
-    """Configuration class for SASRec model with Spring regularization, which
+@SeqRecModelConfigFactory.register("sasrec_sprint")
+class SASRecSPRINTModelConfig(SASRecModelConfig):
+    """Configuration class for SASRec model with SPRINT regularization, which
     extends `SASRecModelConfig`."""
 
     def __init__(
         self,
-        spring_attention_weight: float = 1.0,
-        spring_ffn_weight: float = 0.001,
-        spring_emb_weight: float = 0.1,
-        spring_attention_temperature: float = 4.0,
+        sprint_attention_weight: float = 1.0,
+        sprint_ffn_weight: float = 0.001,
+        sprint_emb_weight: float = 0.1,
+        sprint_attention_temperature: float = 4.0,
         spectral_norm_iters: int = 1,
         **kwargs,
     ) -> None:
         """Initializes the configuration with model hyperparameters.
 
         Args:
-            spring_attention_weight (float): Weight for the Spring regularization on
+            sprint_attention_weight (float): Weight for the SPRINT regularization on
                 attention module. Default is 1.0.
-            spring_ffn_weight (float): Weight for the Spring regularization on feed-forward
+            sprint_ffn_weight (float): Weight for the SPRINT regularization on feed-forward
                 network module. Default is 0.001.
-            spring_emb_weight (float): Weight for the Spring regularization on item
+            sprint_emb_weight (float): Weight for the SPRINT regularization on item
                 embedding matrix. Default is 0.1.
-            spring_attention_temperature (float): Temperature for the Spring regularization
+            sprint_attention_temperature (float): Temperature for the SPRINT regularization
                 on attention module. Default is 4.0.
             spectral_norm_iters (int): Number of power iteration steps for spectral norm
                 estimation. Default is 1.
             **kwargs (Any): Additional keyword arguments for the base `SASRecModelConfig`.
         """
         super().__init__(**kwargs)
-        self.spring_attention_weight = spring_attention_weight
-        self.spring_ffn_weight = spring_ffn_weight
-        self.spring_emb_weight = spring_emb_weight
-        self.spring_attention_temperature = spring_attention_temperature
+        self.sprint_attention_weight = sprint_attention_weight
+        self.sprint_ffn_weight = sprint_ffn_weight
+        self.sprint_emb_weight = sprint_emb_weight
+        self.sprint_attention_temperature = sprint_attention_temperature
         self.spectral_norm_iters = spectral_norm_iters
 
 
-@SeqRecOutputFactory.register("sasrec_spring")
+@SeqRecOutputFactory.register("sasrec_sprint")
 @dataclass
-class SASRecSpringModelOutput(SASRecModelOutput):
-    """Output class for SASRec model with Spring regularization.
+class SASRecSPRINTModelOutput(SASRecModelOutput):
+    """Output class for SASRec model with SPRINT regularization.
 
-    The `SASRecSpringModelOutput` extends the `SASRecModelOutput`
+    The `SASRecSPRINTModelOutput` extends the `SASRecModelOutput`
     without adding any additional attributes.
     """
 
     pass
 
 
-# TODO: add my own paper about Spring regularization.
-@SeqRecModelFactory.register("sasrec_spring")
-class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOutput]):
-    """SASRec model with Spring regularization.
+@SeqRecModelFactory.register("sasrec_sprint")
+class SASRecSPRINTModel(SeqRecModel[SASRecSPRINTModelConfig, SASRecSPRINTModelOutput]):
+    """SASRec model with SPRINT regularization.
 
-    Here we reuse the `SASRecModel` network architecture and add Spring regularization
-    as the `model_loss` in the `SASRecSpringModelOutput`.
+    Here we reuse the `SASRecModel` network architecture and add SPRINT regularization
+    as the `model_loss` in the `SASRecSPRINTModelOutput`.
 
     Reference:
-        - Self-Attentive Sequential Recommendation. ICDM '18.
-        - ...
+    - Self-Attentive Sequential Recommendation. ICDM '18.
+    - Mitigating Popularity Bias Amplification in Scaling Transformer-based Sequential
+        Recommenders. KDD '26.
     """
 
-    config_class = SASRecSpringModelConfig
+    config_class = SASRecSPRINTModelConfig
     supports_gradient_checkpointing = True
 
-    def __init__(self, config: SASRecSpringModelConfig) -> None:
+    def __init__(self, config: SASRecSPRINTModelConfig) -> None:
         """Initializes SASRec model with the given configuration."""
         super().__init__(config)
-        self.config: SASRecSpringModelConfig
+        self.config: SASRecSPRINTModelConfig
 
         assert (
             config.hidden_size % config.num_attention_heads == 0
@@ -97,14 +97,14 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
 
         self.layers = nn.ModuleList(
             [
-                SpringLlamaDecoderLayer(
+                SPRINTLlamaDecoderLayer(
                     hidden_size=config.hidden_size,
                     num_heads=config.num_attention_heads,
                     intermediate_size=config.hidden_size * 4,
                     attention_dropout=config.attention_dropout,
                     attention_bias=config.attention_bias,
                     ffn_bias=config.ffn_bias,
-                    spring_attention_temperature=config.spring_attention_temperature,
+                    sprint_attention_temperature=config.sprint_attention_temperature,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
@@ -123,8 +123,8 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         output_hidden_states: bool = False,
         output_attentions: bool = False,
         **kwargs,
-    ) -> SASRecSpringModelOutput:
-        """Forward pass for SASRec model with Spring regularization.
+    ) -> SASRecSPRINTModelOutput:
+        """Forward pass for SASRec model with SPRINT regularization.
 
         Args:
             input_ids (Int[torch.Tensor, "B L"]): Input item ID sequences of shape (batch_size, seq_len).
@@ -135,7 +135,7 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
             **kwargs (Any): Additional keyword arguments for the model.
 
         Returns:
-            SASRecSpringModelOutput: Model outputs packaged as a `SASRecSpringModelOutput` descendant.
+            SASRecSPRINTModelOutput: Model outputs packaged as a `SASRecSPRINTModelOutput` descendant.
         """
         d = self.config.hidden_size
         H = self.config.num_attention_heads
@@ -151,20 +151,20 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         position_embeddings: Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]
         position_embeddings = self.rotary_emb(hidden_states)
 
-        # Spring regularizations
-        spring_loss_emb = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
-        spring_loss_attn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
-        spring_loss_ffn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
+        # SPRINT regularizations
+        sprint_loss_emb = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
+        sprint_loss_attn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
+        sprint_loss_ffn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
 
-        # Spring regularization on item embeddings
+        # SPRINT regularization on item embeddings
         if output_model_loss:
-            item_emb_sn = spring_power_iteration(
+            item_emb_sn = sprint_power_iteration(
                 self,
                 self.item_embed_weight,
                 name="item_embed_weight",
                 spectral_norm_iters=self.config.spectral_norm_iters,
             )
-            spring_loss_emb = item_emb_sn.log1p()
+            sprint_loss_emb = item_emb_sn.log1p()
 
         all_hidden_states: List[Float[torch.Tensor, "B L d"]] = []
         all_attentions: List[Float[torch.Tensor, "B H L L"]] = []
@@ -185,40 +185,40 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
             if output_attentions:
                 all_attentions.append(attn_weights)
 
-            # Spring regularizations on attention modules
+            # SPRINT regularizations on attention modules
             if output_model_loss and attn_weight_sn is not None:
                 attn_Wo: Float[torch.Tensor, "d H*d_head"] = layer._layer.self_attn.o_proj.weight
-                attn_Wo_sn = spring_power_iteration(layer, attn_Wo, name=f"attn_wo", spectral_norm_iters=iters)
+                attn_Wo_sn = sprint_power_iteration(layer, attn_Wo, name=f"attn_wo", spectral_norm_iters=iters)
 
                 attn_Wv: Float[torch.Tensor, "H d_head d"] = layer._layer.self_attn.v_proj.weight.view(H, head_dim, d)
                 attn_Av_sn = torch.tensor(0.0, device=hidden_states.device, dtype=hidden_states.dtype)
                 for head in range(H):
                     attn_Wv_h: Float[torch.Tensor, "d_head d"] = attn_Wv[head]
-                    attn_Wv_h_sn = spring_power_iteration(
+                    attn_Wv_h_sn = sprint_power_iteration(
                         layer, attn_Wv_h, name=f"attn_head_{head}_wv", spectral_norm_iters=iters
                     )
                     attn_weight_h_sn: Float[torch.Tensor, ""] = attn_weight_sn[head]
                     attn_Av_sn = attn_Av_sn + attn_weight_h_sn * attn_Wv_h_sn.pow(2)
 
-                spring_loss_attn = spring_loss_attn + (attn_Av_sn.sqrt() * attn_Wo_sn).log1p()
+                sprint_loss_attn = sprint_loss_attn + (attn_Av_sn.sqrt() * attn_Wo_sn).log1p()
 
-            # Spring regularizations on feed-forward network modules
+            # SPRINT regularizations on feed-forward network modules
             if output_model_loss:
                 ffn_W1 = layer._layer.mlp.up_proj.weight
                 ffn_W2 = layer._layer.mlp.down_proj.weight
-                ffn_W1_sn = spring_power_iteration(layer, ffn_W1, name=f"ffn_w1", spectral_norm_iters=iters)
-                ffn_W2_sn = spring_power_iteration(layer, ffn_W2, name=f"ffn_w2", spectral_norm_iters=iters)
-                spring_loss_ffn = spring_loss_ffn + (ffn_W1_sn * ffn_W2_sn).log1p()
+                ffn_W1_sn = sprint_power_iteration(layer, ffn_W1, name=f"ffn_w1", spectral_norm_iters=iters)
+                ffn_W2_sn = sprint_power_iteration(layer, ffn_W2, name=f"ffn_w2", spectral_norm_iters=iters)
+                sprint_loss_ffn = sprint_loss_ffn + (ffn_W1_sn * ffn_W2_sn).log1p()
 
         # normalize by number of layers
-        spring_loss_attn = spring_loss_attn / self.config.num_hidden_layers
-        spring_loss_ffn = spring_loss_ffn / self.config.num_hidden_layers
+        sprint_loss_attn = sprint_loss_attn / self.config.num_hidden_layers
+        sprint_loss_ffn = sprint_loss_ffn / self.config.num_hidden_layers
 
-        # model loss: Spring regularization
+        # model loss: SPRINT regularization
         model_loss = (
-            self.config.spring_attention_weight * spring_loss_attn
-            + self.config.spring_ffn_weight * spring_loss_ffn
-            + self.config.spring_emb_weight * spring_loss_emb
+            self.config.sprint_attention_weight * sprint_loss_attn
+            + self.config.sprint_ffn_weight * sprint_loss_ffn
+            + self.config.sprint_emb_weight * sprint_loss_emb
         )
 
         hidden_states = self.final_layer_norm(hidden_states)
@@ -226,7 +226,7 @@ class SASRecSpringModel(SeqRecModel[SASRecSpringModelConfig, SASRecSpringModelOu
         if output_hidden_states:
             all_hidden_states.append(hidden_states)
 
-        return SASRecSpringModelOutput(
+        return SASRecSPRINTModelOutput(
             last_hidden_state=hidden_states,
             model_loss=model_loss if output_model_loss else None,
             hidden_states=tuple(all_hidden_states) if output_hidden_states else None,

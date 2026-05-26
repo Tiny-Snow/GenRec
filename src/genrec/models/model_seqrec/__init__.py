@@ -28,12 +28,12 @@ __all__ += [
     "HSTUModelOutput",
 ]
 
-from .hstu_spring import HSTUSpringModel, HSTUSpringModelConfig, HSTUSpringModelOutput
+from .hstu_sprint import HSTUSPRINTModel, HSTUSPRINTModelConfig, HSTUSPRINTModelOutput
 
 __all__ += [
-    "HSTUSpringModel",
-    "HSTUSpringModelConfig",
-    "HSTUSpringModelOutput",
+    "HSTUSPRINTModel",
+    "HSTUSPRINTModelConfig",
+    "HSTUSPRINTModelOutput",
 ]
 
 from .sasrec import SASRecModel, SASRecModelConfig, SASRecModelOutput
@@ -44,10 +44,10 @@ __all__ += [
     "SASRecModelOutput",
 ]
 
-from .sasrec_spring import SASRecSpringModel, SASRecSpringModelConfig, SASRecSpringModelOutput
+from .sasrec_sprint import SASRecSPRINTModel, SASRecSPRINTModelConfig, SASRecSPRINTModelOutput
 
 __all__ += [
-    "SASRecSpringModel",
-    "SASRecSpringModelConfig",
-    "SASRecSpringModelOutput",
+    "SASRecSPRINTModel",
+    "SASRecSPRINTModelConfig",
+    "SASRecSPRINTModelOutput",
 ]

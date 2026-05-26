@@ -1,22 +1,22 @@
 import torch
 
-import genrec.models.model_seqrec.sasrec_spring as sasrec_spring
+import genrec.models.model_seqrec.sasrec_sprint as sasrec_sprint
 import genrec.models.modules.layers as layers_mod
-from genrec.models.model_seqrec.sasrec_spring import SASRecSpringModel, SASRecSpringModelConfig
+from genrec.models.model_seqrec.sasrec_sprint import SASRecSPRINTModel, SASRecSPRINTModelConfig
 from genrec.models.modules.utils import create_attention_mask
 
 
-def test_sasrec_spring_returns_weighted_model_loss(monkeypatch):
-    config = SASRecSpringModelConfig(
+def test_sasrec_sprint_returns_weighted_model_loss(monkeypatch):
+    config = SASRecSPRINTModelConfig(
         item_size=32,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=2,
-        spring_attention_weight=0.7,
-        spring_ffn_weight=0.2,
-        spring_emb_weight=0.5,
+        sprint_attention_weight=0.7,
+        sprint_ffn_weight=0.2,
+        sprint_emb_weight=0.5,
     )
-    model = SASRecSpringModel(config)
+    model = SASRecSPRINTModel(config)
 
     def mock_power_iteration(module, W, name="", spectral_norm_iters=1, eps=1e-12):
         return torch.full((), 2.0, device=W.device, dtype=W.dtype)
@@ -29,10 +29,10 @@ def test_sasrec_spring_returns_weighted_model_loss(monkeypatch):
             dtype=attn_weight.dtype,
         )
 
-    monkeypatch.setattr(sasrec_spring, "spring_power_iteration", mock_power_iteration)
+    monkeypatch.setattr(sasrec_sprint, "sprint_power_iteration", mock_power_iteration)
     monkeypatch.setattr(
         layers_mod,
-        "spring_attention_weight_spectral_norm",
+        "sprint_attention_weight_spectral_norm",
         mock_attention_weight_spectral_norm,
     )
 
@@ -61,22 +61,22 @@ def test_sasrec_spring_returns_weighted_model_loss(monkeypatch):
     ffn_component = torch.log1p(torch.tensor(4.0, device=device, dtype=dtype))
     emb_component = torch.log1p(torch.tensor(2.0, device=device, dtype=dtype))
     expected_model_loss = (
-        config.spring_attention_weight * per_layer_attention
-        + config.spring_ffn_weight * ffn_component
-        + config.spring_emb_weight * emb_component
+        config.sprint_attention_weight * per_layer_attention
+        + config.sprint_ffn_weight * ffn_component
+        + config.sprint_emb_weight * emb_component
     )
 
     torch.testing.assert_close(output.model_loss, expected_model_loss)
 
 
-def test_sasrec_spring_skips_model_loss_when_disabled():
-    config = SASRecSpringModelConfig(
+def test_sasrec_sprint_skips_model_loss_when_disabled():
+    config = SASRecSPRINTModelConfig(
         item_size=16,
         hidden_size=4,
         num_attention_heads=1,
         num_hidden_layers=1,
     )
-    model = SASRecSpringModel(config)
+    model = SASRecSPRINTModel(config)
 
     input_ids = torch.randint(1, config.item_size + 1, (1, 2))
     attention_mask = torch.ones_like(input_ids)
@@ -87,20 +87,20 @@ def test_sasrec_spring_skips_model_loss_when_disabled():
     assert output.last_hidden_state.shape == (1, 2, config.hidden_size)
 
 
-def test_sasrec_spring_power_iteration_registers_and_updates_buffers():
-    config = SASRecSpringModelConfig(
+def test_sasrec_sprint_power_iteration_registers_and_updates_buffers():
+    config = SASRecSPRINTModelConfig(
         item_size=8,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
         spectral_norm_iters=50,
     )
-    model = SASRecSpringModel(config)
+    model = SASRecSPRINTModel(config)
 
     torch.manual_seed(0)
     weight_first = torch.randn(3, 3, dtype=torch.float32)
     sigma_first_expected = torch.linalg.svdvals(weight_first)[0]
-    sigma_first = layers_mod.spring_power_iteration(
+    sigma_first = layers_mod.sprint_power_iteration(
         model,
         weight_first,
         name="probe",
@@ -112,7 +112,7 @@ def test_sasrec_spring_power_iteration_registers_and_updates_buffers():
 
     weight_second = torch.randn(3, 3, dtype=torch.float32)
     sigma_second_expected = torch.linalg.svdvals(weight_second)[0]
-    sigma_second = layers_mod.spring_power_iteration(
+    sigma_second = layers_mod.sprint_power_iteration(
         model,
         weight_second,
         name="probe",
@@ -123,7 +123,7 @@ def test_sasrec_spring_power_iteration_registers_and_updates_buffers():
 
     # calling without a name should not create persistent buffers
     weight_third = torch.tensor([[2.0, 1.0], [1.0, 2.0]], dtype=torch.float32)
-    sigma_third = layers_mod.spring_power_iteration(
+    sigma_third = layers_mod.sprint_power_iteration(
         model,
         weight_third,
         spectral_norm_iters=config.spectral_norm_iters,
@@ -132,15 +132,15 @@ def test_sasrec_spring_power_iteration_registers_and_updates_buffers():
     assert torch.isfinite(sigma_third)
 
 
-def test_sasrec_spring_attention_weight_spectral_norm_masks_padding():
-    config = SASRecSpringModelConfig(
+def test_sasrec_sprint_attention_weight_spectral_norm_masks_padding():
+    config = SASRecSPRINTModelConfig(
         item_size=8,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
-        spring_attention_temperature=0.5,
+        sprint_attention_temperature=0.5,
     )
-    model = SASRecSpringModel(config)
+    model = SASRecSPRINTModel(config)
 
     attn_weight = torch.tensor(
         [
@@ -161,13 +161,13 @@ def test_sasrec_spring_attention_weight_spectral_norm_masks_padding():
     )
     attention_mask = torch.tensor([[1, 0, 1]], dtype=torch.long)
 
-    result = layers_mod.spring_attention_weight_spectral_norm(
+    result = layers_mod.sprint_attention_weight_spectral_norm(
         attn_weight,
-        tau=config.spring_attention_temperature,
+        tau=config.sprint_attention_temperature,
         padding_mask=attention_mask,
     )
 
-    tau = config.spring_attention_temperature
+    tau = config.sprint_attention_temperature
     mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
     masked_attn = attn_weight.masked_fill(mask, 0.0)
     query_sums = masked_attn.sum(dim=-2).permute(1, 0, 2).flatten(start_dim=1)
@@ -178,14 +178,14 @@ def test_sasrec_spring_attention_weight_spectral_norm_masks_padding():
     torch.testing.assert_close(result, expected)
 
 
-def test_sasrec_spring_uses_gradient_checkpointing():
-    config = SASRecSpringModelConfig(
+def test_sasrec_sprint_uses_gradient_checkpointing():
+    config = SASRecSPRINTModelConfig(
         item_size=12,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=2,
     )
-    model = SASRecSpringModel(config)
+    model = SASRecSPRINTModel(config)
     model.gradient_checkpointing_enable()
     model.train()
 

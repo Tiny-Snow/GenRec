@@ -26,22 +26,22 @@ __all__ += [
 
 from .layers import (
     LlamaDecoderLayer,
-    SpringLlamaDecoderLayer,
+    SPRINTLlamaDecoderLayer,
     SequentialTransductionUnit,
-    SpringSequentialTransductionUnit,
+    SPRINTSequentialTransductionUnit,
     T5Block,
-    spring_attention_weight_spectral_norm,
-    spring_power_iteration,
+    sprint_attention_weight_spectral_norm,
+    sprint_power_iteration,
 )
 
 __all__ += [
     "LlamaDecoderLayer",
-    "SpringLlamaDecoderLayer",
+    "SPRINTLlamaDecoderLayer",
     "SequentialTransductionUnit",
-    "SpringSequentialTransductionUnit",
+    "SPRINTSequentialTransductionUnit",
     "T5Block",
-    "spring_attention_weight_spectral_norm",
-    "spring_power_iteration",
+    "sprint_attention_weight_spectral_norm",
+    "sprint_power_iteration",
 ]
 
 from .posemb import (

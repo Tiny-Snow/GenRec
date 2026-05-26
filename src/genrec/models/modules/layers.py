@@ -17,12 +17,12 @@ from .utils import create_attention_mask
 
 __all__ = [
     "LlamaDecoderLayer",
-    "SpringLlamaDecoderLayer",
+    "SPRINTLlamaDecoderLayer",
     "SequentialTransductionUnit",
-    "SpringSequentialTransductionUnit",
+    "SPRINTSequentialTransductionUnit",
     "T5Block",
-    "spring_attention_weight_spectral_norm",
-    "spring_power_iteration",
+    "sprint_attention_weight_spectral_norm",
+    "sprint_power_iteration",
 ]
 
 
@@ -250,7 +250,7 @@ class SequentialTransductionUnit(GradientCheckpointingLayer):
         return hidden_states, attn_weights
 
 
-def spring_power_iteration(
+def sprint_power_iteration(
     module: nn.Module,
     W: Float[torch.Tensor, "m n"],
     name: str = "",
@@ -322,7 +322,7 @@ def spring_power_iteration(
     return singular_value
 
 
-def spring_attention_weight_spectral_norm(
+def sprint_attention_weight_spectral_norm(
     attn_weights: Float[torch.Tensor, "B H L L"],
     tau: float,
     padding_mask: Optional[Int[torch.Tensor, "B L"]] = None,
@@ -346,7 +346,7 @@ def spring_attention_weight_spectral_norm(
     Args:
         attn_weights (Float[torch.Tensor, "B H L L"]): Attention weight tensor
             of shape (batch_size, num_heads, seq_len, seq_len).
-        tau (float): Temperature for the Spring regularization on attention module.
+        tau (float): Temperature for the SPRINT regularization on attention module.
         padding_mask (Optional[Int[torch.Tensor, "B L"]]): Optional padding mask
             where 1 indicates valid tokens and 0 indicates padding tokens. This is
             used to generate the causal mask for attention weights. If None, no masking
@@ -372,14 +372,14 @@ def spring_attention_weight_spectral_norm(
     return norm_p1
 
 
-# TODO: add my own paper about Spring regularization.
-class SpringLlamaDecoderLayer(GradientCheckpointingLayer):
-    """LlamaDecoderLayer with Spring regularization.
+class SPRINTLlamaDecoderLayer(GradientCheckpointingLayer):
+    """LlamaDecoderLayer with SPRINT regularization.
 
     See `LlamaDecoderLayer` for more details.
 
     References:
-    - ...
+    - Mitigating Popularity Bias Amplification in Scaling Transformer-based Sequential
+        Recommenders. KDD '26.
     """
 
     def __init__(
@@ -390,9 +390,9 @@ class SpringLlamaDecoderLayer(GradientCheckpointingLayer):
         attention_dropout: float = 0.0,
         attention_bias: bool = False,
         ffn_bias: bool = False,
-        spring_attention_temperature: float = 1.0,
+        sprint_attention_temperature: float = 1.0,
     ) -> None:
-        """Initializes SpringLlamaDecoderLayer module.
+        """Initializes SPRINTLlamaDecoderLayer module.
 
         Args:
             hidden_size (int): Dimensionality of the model's hidden representations.
@@ -401,12 +401,12 @@ class SpringLlamaDecoderLayer(GradientCheckpointingLayer):
             attention_dropout (float): Dropout rate for attention weights. Default is 0.0.
             attention_bias (bool): Whether to include bias terms in the attention projections. Default is False.
             ffn_bias (bool): Whether to include bias terms in the feed-forward network projections. Default is False.
-            apring_attention_temperature (float): Temperature for the Spring regularization on attention module.
+            apring_attention_temperature (float): Temperature for the SPRINT regularization on attention module.
                 Default is 1.0.
         """
         super().__init__()
 
-        self.spring_attention_temperature = spring_attention_temperature
+        self.sprint_attention_temperature = sprint_attention_temperature
 
         self._layer = LlamaDecoderLayer(
             hidden_size=hidden_size,
@@ -427,7 +427,7 @@ class SpringLlamaDecoderLayer(GradientCheckpointingLayer):
         ] = None,
         output_model_loss: bool = False,
     ) -> Tuple[Float[torch.Tensor, "B L d"], Float[torch.Tensor, "B H L L"], Optional[Float[torch.Tensor, "H"]]]:
-        """Forward pass for LlamaDecoderLayer with Spring regularization.
+        """Forward pass for LlamaDecoderLayer with SPRINT regularization.
 
         Args:
             hidden_states (Float[torch.Tensor, "B L d"]): Input tensor of shape (batch_size, seq_len, hidden_size).
@@ -437,17 +437,17 @@ class SpringLlamaDecoderLayer(GradientCheckpointingLayer):
                 attention scores before softmax, where the masked positions are indicated by large negative values.
             position_embeddings (Optional[Tuple[Float[torch.Tensor, "B L head_dim"], Float[torch.Tensor, "B L head_dim"]]]):
                 Optional tuple of cosine and sine embeddings for RoPE.
-            output_model_loss (bool): Whether to compute and return the model-specific loss (i.e., Spring loss).
+            output_model_loss (bool): Whether to compute and return the model-specific loss (i.e., SPRINT loss).
                 Default is False.
 
         Returns:
             Tuple[Float[torch.Tensor, "B L d"], Float[torch.Tensor, "B H L L"], Optional[Float[torch.Tensor, "H"]]]:
-                A tuple containing the output tensor, the attention weights tensor, and optionally the Spring losses
+                A tuple containing the output tensor, the attention weights tensor, and optionally the SPRINT losses
                 on attention weights (i.e., spectral norms for attention weights of each head).
 
         .. note::
-            Note that the other components of Spring loss (e.g., item embedding Spring loss, FFN Spring loss, and
-            attention V/O projection Spring loss) are computed outside this layer for the consistency with gradient
+            Note that the other components of SPRINT loss (e.g., item embedding SPRINT loss, FFN SPRINT loss, and
+            attention V/O projection SPRINT loss) are computed outside this layer for the consistency with gradient
             checkpointing.
         """
         hidden_states, attn_weights = self._layer.forward(  # NOTE: to avoid meaningless recomputation in checkpointing
@@ -456,12 +456,12 @@ class SpringLlamaDecoderLayer(GradientCheckpointingLayer):
             position_embeddings=position_embeddings,
         )
 
-        # Spring regularizations on attention weights
+        # SPRINT regularizations on attention weights
         attn_weight_sn: Optional[Float[torch.Tensor, "H"]] = None
         if output_model_loss:
-            attn_weight_sn = spring_attention_weight_spectral_norm(
+            attn_weight_sn = sprint_attention_weight_spectral_norm(
                 attn_weights,
-                tau=self.spring_attention_temperature,
+                tau=self.sprint_attention_temperature,
                 padding_mask=padding_mask,
             )
         else:
@@ -470,16 +470,16 @@ class SpringLlamaDecoderLayer(GradientCheckpointingLayer):
         return hidden_states, attn_weights, attn_weight_sn
 
 
-# TODO: add my own paper about Spring regularization.
-class SpringSequentialTransductionUnit(GradientCheckpointingLayer):
-    """Sequential Transduction Unit (STU) layer with Spring regularization.
+class SPRINTSequentialTransductionUnit(GradientCheckpointingLayer):
+    """Sequential Transduction Unit (STU) layer with SPRINT regularization.
 
     See `SequentialTransductionUnit` for more details.
 
     References:
     - Actions Speak Louder than Words: Trillion-Parameter Sequential Transducers for
         Generative Recommendations. ICML '24.
-    - ...
+    - Mitigating Popularity Bias Amplification in Scaling Transformer-based Sequential
+        Recommenders. KDD '26.
     """
 
     def __init__(
@@ -496,9 +496,9 @@ class SpringSequentialTransductionUnit(GradientCheckpointingLayer):
         enable_learnable_rel_posemb: bool = True,
         enable_attention_gating: bool = True,
         enable_ffn: bool = False,
-        spring_attention_temperature: float = 1.0,
+        sprint_attention_temperature: float = 1.0,
     ) -> None:
-        """Initializes SpringSequentialTransductionUnit module.
+        """Initializes SPRINTSequentialTransductionUnit module.
 
         Args:
             hidden_size (int): Dimensionality of the model's hidden representations.
@@ -519,12 +519,12 @@ class SpringSequentialTransductionUnit(GradientCheckpointingLayer):
             enable_attention_gating (bool): Whether to enable the attention gating mechanism. If False,
                 standard attention computation is used. Default is True.
             enable_ffn (bool): Whether to include a feed-forward network after attention. Default is False.
-            spring_attention_temperature (float): Temperature for the Spring regularization on attention module.
+            sprint_attention_temperature (float): Temperature for the SPRINT regularization on attention module.
                 Default is 1.0.
         """
         super().__init__()
 
-        self.spring_attention_temperature = spring_attention_temperature
+        self.sprint_attention_temperature = sprint_attention_temperature
 
         self._layer = SequentialTransductionUnit(
             hidden_size=hidden_size,
@@ -552,7 +552,7 @@ class SpringSequentialTransductionUnit(GradientCheckpointingLayer):
         timestamps: Optional[Int[torch.Tensor, "B L"]] = None,
         output_model_loss: bool = False,
     ) -> Tuple[Float[torch.Tensor, "B L d"], Float[torch.Tensor, "B H L L"], Optional[Float[torch.Tensor, "H"]]]:
-        """Forward pass for SequentialTransductionUnit with Spring regularization.
+        """Forward pass for SequentialTransductionUnit with SPRINT regularization.
 
         Args:
             hidden_states (Float[torch.Tensor, "B L d"]): Input tensor of shape (batch_size, seq_len, hidden_size).
@@ -564,17 +564,17 @@ class SpringSequentialTransductionUnit(GradientCheckpointingLayer):
                 Optional tuple of cosine and sine embeddings for RoPE. Note that when `enable_learnable_rel_posemb` is True,
                 this argument will be ignored.
             timestamps (Optional[Int[torch.Tensor, "B L"]]): Optional timestamps for each item in the sequence.
-            output_model_loss (bool): Whether to compute and return the model-specific loss (i.e., Spring losses).
+            output_model_loss (bool): Whether to compute and return the model-specific loss (i.e., SPRINT losses).
                 Default is False.
 
         Returns:
             Tuple[Float[torch.Tensor, "B L d"], Float[torch.Tensor, "B H L L"], Optional[Float[torch.Tensor, "H"]]]:
-                A tuple containing the output tensor, the attention weights tensor, and optionally the Spring losses
+                A tuple containing the output tensor, the attention weights tensor, and optionally the SPRINT losses
                 on attention weights (i.e., spectral norms for attention weights of each head).
 
         .. note::
-            Note that the other components of Spring loss (e.g., item embedding Spring loss, FFN Spring loss, and
-            attention V/O projection Spring loss) are computed outside this layer for the consistency with gradient
+            Note that the other components of SPRINT loss (e.g., item embedding SPRINT loss, FFN SPRINT loss, and
+            attention V/O projection SPRINT loss) are computed outside this layer for the consistency with gradient
             checkpointing.
         """
         hidden_states, attn_weights = self._layer.forward(  # NOTE: to avoid meaningless recomputation in checkpointing
@@ -584,12 +584,12 @@ class SpringSequentialTransductionUnit(GradientCheckpointingLayer):
             timestamps=timestamps,
         )
 
-        # Spring regularizations on attention weights
+        # SPRINT regularizations on attention weights
         attn_weight_sn: Optional[Float[torch.Tensor, "H"]] = None
         if output_model_loss:
-            attn_weight_sn = spring_attention_weight_spectral_norm(
+            attn_weight_sn = sprint_attention_weight_spectral_norm(
                 attn_weights,
-                tau=self.spring_attention_temperature,
+                tau=self.sprint_attention_temperature,
                 padding_mask=padding_mask,
             )
         else:

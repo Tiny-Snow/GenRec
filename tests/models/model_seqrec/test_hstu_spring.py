@@ -2,24 +2,24 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-import genrec.models.model_seqrec.hstu_spring as hstu_spring
+import genrec.models.model_seqrec.hstu_sprint as hstu_sprint
 import genrec.models.modules.layers as layers_mod
-from genrec.models.model_seqrec.hstu_spring import HSTUSpringModel, HSTUSpringModelConfig
+from genrec.models.model_seqrec.hstu_sprint import HSTUSPRINTModel, HSTUSPRINTModelConfig
 from genrec.models.modules.utils import create_attention_mask
 
 
-def test_hstu_spring_returns_weighted_model_loss(monkeypatch) -> None:
-    config = HSTUSpringModelConfig(
+def test_hstu_sprint_returns_weighted_model_loss(monkeypatch) -> None:
+    config = HSTUSPRINTModelConfig(
         item_size=32,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
         enable_ffn=True,
-        spring_attention_weight=0.6,
-        spring_ffn_weight=0.3,
-        spring_emb_weight=0.2,
+        sprint_attention_weight=0.6,
+        sprint_ffn_weight=0.3,
+        sprint_emb_weight=0.2,
     )
-    model = HSTUSpringModel(config)
+    model = HSTUSPRINTModel(config)
 
     power_values = {
         "item_embed_weight": 2.0,
@@ -38,10 +38,10 @@ def test_hstu_spring_returns_weighted_model_loss(monkeypatch) -> None:
     def fake_attention_weight_spectral_norm(attn_weight, tau, padding_mask=None):
         return attn_sn_values.to(device=attn_weight.device, dtype=attn_weight.dtype)
 
-    monkeypatch.setattr(hstu_spring, "spring_power_iteration", fake_power_iteration)
+    monkeypatch.setattr(hstu_sprint, "sprint_power_iteration", fake_power_iteration)
     monkeypatch.setattr(
         layers_mod,
-        "spring_attention_weight_spectral_norm",
+        "sprint_attention_weight_spectral_norm",
         fake_attention_weight_spectral_norm,
     )
 
@@ -73,7 +73,7 @@ def test_hstu_spring_returns_weighted_model_loss(monkeypatch) -> None:
         dtype=dtype,
     )
     attn_Av = (attn_sn * (wv_values**2)).sum()
-    spring_loss_attn = torch.log1p(
+    sprint_loss_attn = torch.log1p(
         torch.sqrt(attn_Av) * torch.tensor(power_values["attn_wo"], device=device, dtype=dtype)
     )
 
@@ -84,22 +84,22 @@ def test_hstu_spring_returns_weighted_model_loss(monkeypatch) -> None:
     emb_loss = torch.log1p(torch.tensor(power_values["item_embed_weight"], device=device, dtype=dtype))
 
     expected_model_loss = (
-        config.spring_attention_weight * spring_loss_attn
-        + config.spring_ffn_weight * ffn_loss
-        + config.spring_emb_weight * emb_loss
+        config.sprint_attention_weight * sprint_loss_attn
+        + config.sprint_ffn_weight * ffn_loss
+        + config.sprint_emb_weight * emb_loss
     )
 
     torch.testing.assert_close(output.model_loss, expected_model_loss)
 
 
-def test_hstu_spring_skips_model_loss_when_disabled() -> None:
-    config = HSTUSpringModelConfig(
+def test_hstu_sprint_skips_model_loss_when_disabled() -> None:
+    config = HSTUSPRINTModelConfig(
         item_size=16,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
     )
-    model = HSTUSpringModel(config)
+    model = HSTUSPRINTModel(config)
 
     batch_size, seq_len = 1, 3
     input_ids = torch.randint(1, config.item_size + 1, (batch_size, seq_len))
@@ -112,14 +112,14 @@ def test_hstu_spring_skips_model_loss_when_disabled() -> None:
     assert output.last_hidden_state.shape == (batch_size, seq_len, config.hidden_size)
 
 
-def test_hstu_spring_forward_requires_timestamps() -> None:
-    config = HSTUSpringModelConfig(
+def test_hstu_sprint_forward_requires_timestamps() -> None:
+    config = HSTUSPRINTModelConfig(
         item_size=8,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
     )
-    model = HSTUSpringModel(config)
+    model = HSTUSPRINTModel(config)
 
     input_ids = torch.randint(1, config.item_size + 1, (1, 2))
     attention_mask = torch.ones_like(input_ids)
@@ -128,8 +128,8 @@ def test_hstu_spring_forward_requires_timestamps() -> None:
         model(input_ids=input_ids, attention_mask=attention_mask, output_model_loss=True)
 
 
-def test_hstu_spring_handles_disabled_pos_emb_and_uses_rope() -> None:
-    config = HSTUSpringModelConfig(
+def test_hstu_sprint_handles_disabled_pos_emb_and_uses_rope() -> None:
+    config = HSTUSPRINTModelConfig(
         item_size=20,
         hidden_size=8,
         num_attention_heads=2,
@@ -138,7 +138,7 @@ def test_hstu_spring_handles_disabled_pos_emb_and_uses_rope() -> None:
         enable_learnable_rel_posemb=False,
         enable_final_layernorm=True,
     )
-    model = HSTUSpringModel(config)
+    model = HSTUSPRINTModel(config)
 
     assert model.input_pos_emb is None
     assert model.rotary_emb is not None
@@ -155,18 +155,18 @@ def test_hstu_spring_handles_disabled_pos_emb_and_uses_rope() -> None:
     assert output.last_hidden_state.shape == (batch_size, seq_len, config.hidden_size)
 
 
-def test_hstu_spring_model_loss_without_ffn(monkeypatch) -> None:
-    config = HSTUSpringModelConfig(
+def test_hstu_sprint_model_loss_without_ffn(monkeypatch) -> None:
+    config = HSTUSPRINTModelConfig(
         item_size=12,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
         enable_ffn=False,
-        spring_attention_weight=0.5,
-        spring_ffn_weight=0.8,
-        spring_emb_weight=0.3,
+        sprint_attention_weight=0.5,
+        sprint_ffn_weight=0.8,
+        sprint_emb_weight=0.3,
     )
-    model = HSTUSpringModel(config)
+    model = HSTUSPRINTModel(config)
 
     power_values = {
         "item_embed_weight": 1.8,
@@ -182,10 +182,10 @@ def test_hstu_spring_model_loss_without_ffn(monkeypatch) -> None:
     def fake_attention_weight_spectral_norm(attn_weight, tau, padding_mask=None):
         return attn_sn_values.to(device=attn_weight.device, dtype=attn_weight.dtype)
 
-    monkeypatch.setattr(hstu_spring, "spring_power_iteration", fake_power_iteration)
+    monkeypatch.setattr(hstu_sprint, "sprint_power_iteration", fake_power_iteration)
     monkeypatch.setattr(
         layers_mod,
-        "spring_attention_weight_spectral_norm",
+        "sprint_attention_weight_spectral_norm",
         fake_attention_weight_spectral_norm,
     )
 
@@ -214,24 +214,24 @@ def test_hstu_spring_model_loss_without_ffn(monkeypatch) -> None:
         dtype=dtype,
     )
     attn_Av = (attn_sn * (wv_values**2)).sum()
-    spring_loss_attn = torch.log1p(
+    sprint_loss_attn = torch.log1p(
         torch.sqrt(attn_Av) * torch.tensor(power_values["attn_wo"], device=device, dtype=dtype)
     )
     emb_loss = torch.log1p(torch.tensor(power_values["item_embed_weight"], device=device, dtype=dtype))
-    expected_model_loss = config.spring_attention_weight * spring_loss_attn + config.spring_emb_weight * emb_loss
+    expected_model_loss = config.sprint_attention_weight * sprint_loss_attn + config.sprint_emb_weight * emb_loss
 
     torch.testing.assert_close(output.model_loss, expected_model_loss)
 
 
-def test_hstu_spring_normalizes_embeddings_for_spring_loss(monkeypatch) -> None:
-    config = HSTUSpringModelConfig(
+def test_hstu_sprint_normalizes_embeddings_for_sprint_loss(monkeypatch) -> None:
+    config = HSTUSPRINTModelConfig(
         item_size=10,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
         norm_embeddings=True,
     )
-    model = HSTUSpringModel(config)
+    model = HSTUSPRINTModel(config)
 
     captured = {}
 
@@ -247,10 +247,10 @@ def test_hstu_spring_normalizes_embeddings_for_spring_loss(monkeypatch) -> None:
             dtype=attn_weight.dtype,
         )
 
-    monkeypatch.setattr(hstu_spring, "spring_power_iteration", fake_power_iteration)
+    monkeypatch.setattr(hstu_sprint, "sprint_power_iteration", fake_power_iteration)
     monkeypatch.setattr(
         layers_mod,
-        "spring_attention_weight_spectral_norm",
+        "sprint_attention_weight_spectral_norm",
         fake_attention_weight_spectral_norm,
     )
 
@@ -272,20 +272,20 @@ def test_hstu_spring_normalizes_embeddings_for_spring_loss(monkeypatch) -> None:
     torch.testing.assert_close(captured["weight"], expected)
 
 
-def test_hstu_spring_power_iteration_registers_and_updates_buffers() -> None:
-    config = HSTUSpringModelConfig(
+def test_hstu_sprint_power_iteration_registers_and_updates_buffers() -> None:
+    config = HSTUSPRINTModelConfig(
         item_size=8,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
         spectral_norm_iters=50,
     )
-    model = HSTUSpringModel(config)
+    model = HSTUSPRINTModel(config)
 
     torch.manual_seed(0)
     weight_first = torch.randn(3, 3, dtype=torch.float32)
     sigma_first_expected = torch.linalg.svdvals(weight_first)[0]
-    sigma_first = layers_mod.spring_power_iteration(
+    sigma_first = layers_mod.sprint_power_iteration(
         model,
         weight_first,
         name="probe",
@@ -297,7 +297,7 @@ def test_hstu_spring_power_iteration_registers_and_updates_buffers() -> None:
 
     weight_second = torch.randn(3, 3, dtype=torch.float32)
     sigma_second_expected = torch.linalg.svdvals(weight_second)[0]
-    sigma_second = layers_mod.spring_power_iteration(
+    sigma_second = layers_mod.sprint_power_iteration(
         model,
         weight_second,
         name="probe",
@@ -307,7 +307,7 @@ def test_hstu_spring_power_iteration_registers_and_updates_buffers() -> None:
     assert not torch.allclose(model.probe_u, first_u)
 
     weight_third = torch.tensor([[2.0, 1.0], [1.0, 2.0]], dtype=torch.float32)
-    sigma_third = layers_mod.spring_power_iteration(
+    sigma_third = layers_mod.sprint_power_iteration(
         model,
         weight_third,
         spectral_norm_iters=config.spectral_norm_iters,
@@ -316,15 +316,15 @@ def test_hstu_spring_power_iteration_registers_and_updates_buffers() -> None:
     assert torch.isfinite(sigma_third)
 
 
-def test_hstu_spring_attention_weight_spectral_norm_masks_padding() -> None:
-    config = HSTUSpringModelConfig(
+def test_hstu_sprint_attention_weight_spectral_norm_masks_padding() -> None:
+    config = HSTUSPRINTModelConfig(
         item_size=8,
         hidden_size=4,
         num_attention_heads=2,
         num_hidden_layers=1,
-        spring_attention_temperature=0.5,
+        sprint_attention_temperature=0.5,
     )
-    model = HSTUSpringModel(config)
+    model = HSTUSPRINTModel(config)
 
     attn_weight = torch.tensor(
         [
@@ -345,13 +345,13 @@ def test_hstu_spring_attention_weight_spectral_norm_masks_padding() -> None:
     )
     attention_mask = torch.tensor([[1, 0, 1]], dtype=torch.long)
 
-    result = layers_mod.spring_attention_weight_spectral_norm(
+    result = layers_mod.sprint_attention_weight_spectral_norm(
         attn_weight,
-        tau=config.spring_attention_temperature,
+        tau=config.sprint_attention_temperature,
         padding_mask=attention_mask,
     )
 
-    tau = config.spring_attention_temperature
+    tau = config.sprint_attention_temperature
     mask = create_attention_mask(attention_mask, is_causal=True, mask_value=1).bool()
     masked_attn = attn_weight.masked_fill(mask, 0.0)
     query_sums = masked_attn.sum(dim=-2).permute(1, 0, 2).flatten(start_dim=1)
@@ -362,14 +362,14 @@ def test_hstu_spring_attention_weight_spectral_norm_masks_padding() -> None:
     torch.testing.assert_close(result, expected)
 
 
-def test_hstu_spring_uses_gradient_checkpointing() -> None:
-    config = HSTUSpringModelConfig(
+def test_hstu_sprint_uses_gradient_checkpointing() -> None:
+    config = HSTUSPRINTModelConfig(
         item_size=14,
         hidden_size=6,
         num_attention_heads=2,
         num_hidden_layers=2,
     )
-    model = HSTUSpringModel(config)
+    model = HSTUSPRINTModel(config)
     model.gradient_checkpointing_enable()
     model.train()
 
