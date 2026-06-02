@@ -24,7 +24,7 @@ The framework is built on [PyTorch](https://pytorch.org/) and [Hugging Face Tran
 
 ## 🎉 News
 
-- **[May 16, 2026]** Our paper [Mitigating Popularity Bias Amplification in Scaling Transformer-based Sequential Recommenders](https://doi.org/10.1145/3770855.3818185), which proposes **SPRINT**, has been accepted to **KDD 2026**!
+- **[May 16, 2026]** Our paper [The Pitfall of Scaling Up: Uncovering and Mitigating Popularity Bias Amplification in Scaling Transformer-based Recommenders](https://doi.org/10.1145/3770855.3818185), which proposes **SPRINT**, has been accepted to **KDD 2026**!
 
 ## ✨ Features
 
